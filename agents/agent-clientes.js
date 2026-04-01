@@ -139,16 +139,44 @@ async function capturarLead(de, profileName) {
   }
 }
 
-async function notificarStudio(titulo, campos) {
-  const linhas = Object.entries(campos).map(([k, v]) => `${k}: *${v}*`).join('\n');
-  await enviarMensagem(DONO(), `🔔 *${titulo}*\n\n${linhas}`).catch(e =>
+async function notificarStudioAgendamento(nome, numero, modalidade, dia, horario) {
+  const msg =
+    `🔔 *Nova solicitacao de agendamento!*\n\n` +
+    `👤 Aluno: *${nome}*\n` +
+    `📱 WhatsApp: *${numero}*\n` +
+    `🏋️ Modalidade: *${modalidade}*\n` +
+    `📅 Dia: *${dia}*\n` +
+    `⏰ Horario: *${horario}*\n\n` +
+    `━━━━━━━━━━━━━━\n` +
+    `*Responda com um dos comandos:*\n\n` +
+    `✅ Confirmar vaga:\n` +
+    `/confirmar ${numero} ${modalidade} ${dia} ${horario}\n\n` +
+    `❌ Sem vaga (sugerir outro horario):\n` +
+    `/semvaga ${numero}\n\n` +
+    `💬 Mensagem livre:\n` +
+    `/msg ${numero} [seu texto aqui]`;
+
+  await enviarMensagem(DONO(), msg).catch(e =>
     logger.warn(`Falha notificar studio: ${e.message}`)
   );
 }
 
-// ─── Comandos do dono (respostas para alunos) ────────────────────────────────
-// /confirmar 5511999998888 Pilates Quarta 10h
-// /msg 5511999998888 Ola, seu horario esta confirmado!
+async function notificarStudioAtendente(nome, numero) {
+  const msg =
+    `🙋 *Aluno quer falar com atendente!*\n\n` +
+    `👤 Nome: *${nome}*\n` +
+    `📱 WhatsApp: *${numero}*\n\n` +
+    `━━━━━━━━━━━━━━\n` +
+    `*Responda com:*\n\n` +
+    `💬 Mensagem livre:\n` +
+    `/msg ${numero} [seu texto aqui]`;
+
+  await enviarMensagem(DONO(), msg).catch(e =>
+    logger.warn(`Falha notificar studio: ${e.message}`)
+  );
+}
+
+// ─── Comandos do dono ────────────────────────────────────────────────────────
 async function processarComandoDono(mensagem) {
   const msgTrim = mensagem.trim();
 
@@ -157,32 +185,56 @@ async function processarComandoDono(mensagem) {
   if (confirmarMatch) {
     const [, numero, modalidade, dia, horario] = confirmarMatch;
     const para = `whatsapp:+${normalizarNumero(numero)}`;
-    await enviarMensagem(para, MSG.agendamentoConfirmado({ nome: 'Aluno', modalidade, dia, horario }));
+
+    // Tenta buscar o nome do aluno na planilha
+    let nomeAluno = 'Aluno';
+    try {
+      const cliente = await Clientes.buscarPorWhatsApp(`whatsapp:+${normalizarNumero(numero)}`);
+      if (cliente?.dados?.[1]) nomeAluno = cliente.dados[1];
+    } catch (e) {}
+
+    await enviarMensagem(para, MSG.agendamentoConfirmado({ nome: nomeAluno, modalidade, dia, horario }));
     return `✅ Confirmacao enviada para +${numero}`;
+  }
+
+  // /semvaga <numero>
+  const semVagaMatch = msgTrim.match(/^\/semvaga\s+(\d+)/i);
+  if (semVagaMatch) {
+    const [, numero] = semVagaMatch;
+    const para = `whatsapp:+${normalizarNumero(numero)}`;
+    await enviarMensagem(para,
+      `😔 Infelizmente o horario solicitado nao tem vaga no momento.\n\n` +
+      `Mas temos outros horarios disponiveis! Gostaria de escolher outra opcao?\n\n` +
+      `*PILATES*\nManha: 07h, 08h, 09h, 10h\nTarde: 15h, 16h, 17h, 18h, 19h, 20h\n\n` +
+      `*FUNCIONAL*\nManha: 07h, 08h, 09h, 10h, 11h, 12h\nTarde: 15h, 16h, 17h\n\n` +
+      `Responda com o horario e dia que prefere ou digite *1* para reiniciar o agendamento.`
+    );
+    return `✅ Mensagem de sem vaga enviada para +${numero}`;
   }
 
   // /msg <numero> <texto livre>
   const msgMatch = msgTrim.match(/^\/msg\s+(\d+)\s+(.+)/is);
   if (msgMatch) {
     const [, numero, texto] = msgMatch;
-    const para = `whatsapp:+${normalizarNumero(numero)}`;
-    await enviarMensagem(para, texto.trim());
+    await enviarMensagem(`whatsapp:+${normalizarNumero(numero)}`, texto.trim());
     return `✅ Mensagem enviada para +${numero}`;
   }
 
-  // /ajuda — lista comandos disponíveis
+  // /ajuda
   if (/^\/ajuda$/i.test(msgTrim)) {
     return (
-      `*Comandos disponíveis:*\n\n` +
-      `*/confirmar* [numero] [modalidade] [dia] [horario]\n` +
-      `Ex: /confirmar 5511999998888 Pilates Quarta 10h\n\n` +
-      `*/msg* [numero] [texto]\n` +
-      `Ex: /msg 5511999998888 Seu horario esta confirmado!\n\n` +
-      `*/ajuda* — lista os comandos`
+      `*Comandos disponiveis:*\n\n` +
+      `✅ */confirmar* [numero] [modalidade] [dia] [horario]\n` +
+      `_Ex: /confirmar 5511999998888 Pilates Quarta 10h_\n\n` +
+      `❌ */semvaga* [numero]\n` +
+      `_Ex: /semvaga 5511999998888_\n\n` +
+      `💬 */msg* [numero] [texto livre]\n` +
+      `_Ex: /msg 5511999998888 Ola, tudo bem?_\n\n` +
+      `❓ */ajuda* — lista os comandos`
     );
   }
 
-  return null; // Não é comando
+  return null;
 }
 
 // ─── Roteador principal ───────────────────────────────────────────────────────
@@ -266,14 +318,7 @@ async function processarMensagem(de, mensagem, profileName) {
 
       await Clientes.salvarCliente({ nome, whatsapp: de, status: 'Lead', observacoes: `${modalidade} - ${dia} - ${horario}` }).catch(() => {});
 
-      await notificarStudio('Nova solicitacao de agendamento!', {
-        '👤 Aluno': nome,
-        '📱 WhatsApp': normalizarNumero(de),
-        '🏋️ Modalidade': modalidade,
-        '📅 Dia': dia,
-        '⏰ Horario': horario,
-        '\nResponder': `\n/confirmar ${normalizarNumero(de)} ${modalidade} ${dia} ${horario}`
-      });
+      await notificarStudioAgendamento(nome, normalizarNumero(de), modalidade, dia, horario);
 
       await Logs.registrar('CLIENTES', 'INFO', `Agendamento: ${nome} - ${modalidade} ${dia} ${horario}`);
       return MSG.encaminharAtendente();
@@ -311,11 +356,7 @@ async function processarMensagem(de, mensagem, profileName) {
       const nome = msgTrim.length >= 3 ? msgTrim : profileName;
       limparEstado(de);
 
-      await notificarStudio('Aluno quer falar com atendente!', {
-        '👤 Nome': nome,
-        '📱 WhatsApp': normalizarNumero(de),
-        '\nResponder': `\n/msg ${normalizarNumero(de)} [sua mensagem]`
-      });
+      await notificarStudioAtendente(nome, normalizarNumero(de));
 
       await Logs.registrar('CLIENTES', 'INFO', `Atendente solicitado: ${nome} (${de})`);
       return MSG.aguardandoAtendente(nome);
