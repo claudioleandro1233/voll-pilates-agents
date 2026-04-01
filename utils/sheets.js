@@ -1,28 +1,13 @@
 // utils/sheets.js — Wrapper Google Sheets API v4
 require('dotenv').config();
 const { google } = require('googleapis');
+const { getAuth } = require('./google-auth');
 const logger = require('./logger');
-
-// Autenticação via Service Account
-let auth;
-
-function getAuth() {
-  if (!auth) {
-    const keyFile = process.env.GOOGLE_SERVICE_ACCOUNT_KEY;
-    auth = new google.auth.GoogleAuth({
-      keyFile,
-      scopes: [
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/drive'
-      ]
-    });
-  }
-  return auth;
-}
 
 function getSheetsClient() {
   return google.sheets({ version: 'v4', auth: getAuth() });
 }
+
 
 // ─── IDs das planilhas por domínio ─────────────────────────────────────────
 const SHEET_IDS = {

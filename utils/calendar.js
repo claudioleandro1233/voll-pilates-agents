@@ -1,6 +1,7 @@
 // utils/calendar.js — Wrapper Google Calendar API v3
 require('dotenv').config();
 const { google } = require('googleapis');
+const { getAuth } = require('./google-auth');
 const logger = require('./logger');
 
 // ─── Horários do studio ─────────────────────────────────────────────────────
@@ -8,13 +9,6 @@ const logger = require('./logger');
 // Sáb alternados: 08:00–11:45
 const HORARIOS_SEMANA = ['07:00', '07:45', '08:30', '09:15', '10:00', '10:45'];
 const HORARIOS_SABADO = ['08:00', '08:45', '09:30', '10:15', '11:00', '11:45'];
-
-function getAuth() {
-  return new google.auth.GoogleAuth({
-    keyFile: process.env.GOOGLE_SERVICE_ACCOUNT_KEY,
-    scopes: ['https://www.googleapis.com/auth/calendar']
-  });
-}
 
 function getCalendarClient() {
   return google.calendar({ version: 'v3', auth: getAuth() });
