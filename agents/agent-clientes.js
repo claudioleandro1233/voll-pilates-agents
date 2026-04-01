@@ -34,8 +34,11 @@ const MSG = {
     `4️⃣ TotalPass / Welhub\n` +
     `5️⃣ Endereco e horarios`,
 
-  agendar: () =>
-    `Otimo! 😊 Escolha o tipo e horario:\n\n` +
+  pedirNome: () =>
+    `Otimo! 😊 Para agendar, primeiro me diz seu *nome completo*:`,
+
+  agendar: (nome) =>
+    `Perfeito, *${nome}*! Escolha o tipo e horario:\n\n` +
     `*PILATES*\n` +
     `Manha: 07h, 08h, 09h, 10h\n` +
     `Tarde: 15h, 16h, 17h, 18h, 19h, 20h\n\n` +
@@ -174,6 +177,14 @@ async function processarMensagem(de, mensagem, profileName) {
     if (estado.etapa === 'aguardando_nome_agendamento') {
       return verAgendamentos(de, msgTrim, estado);
     }
+    // Fluxo de agendamento: coletando nome
+    if (estado.etapa === 'aguardando_nome_agendar') {
+      const nome = msgTrim;
+      if (nome.length < 3) return `Por favor, informe seu nome completo.`;
+      atualizarDados(de, { nome });
+      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_tipo_horario', dados: { nome } });
+      return MSG.agendar(nome);
+    }
     // Fluxo de agendamento: aguardando horário escolhido após mostrar opções
     if (estado.etapa === 'aguardando_tipo_horario') {
       limparEstado(de);
@@ -189,9 +200,10 @@ async function processarMensagem(de, mensagem, profileName) {
       // Notifica o studio sobre a solicitação
       const numeroStudio = process.env.DONO_WHATSAPP;
       const numeroAluno = de.replace('whatsapp:', '');
+      const nomeAluno = estado.dados?.nome || profileName || 'Desconhecido';
       const msgStudio =
         `🔔 *Nova solicitacao de agendamento!*\n\n` +
-        `👤 Aluno: *${profileName || 'Desconhecido'}*\n` +
+        `👤 Aluno: *${nomeAluno}*\n` +
         `📱 WhatsApp: *${numeroAluno}*\n` +
         `📝 Preferencia: *${msgTrim}*\n\n` +
         `Verifique a disponibilidade e confirme com o aluno.`;
@@ -208,8 +220,8 @@ async function processarMensagem(de, mensagem, profileName) {
   // ── Opção 1 ou palavras relacionadas a agendar ───────────────────────────
   if (msgLower === '1' || /agendar|marcar|quero aula|aula/i.test(msgLower)) {
     await capturarLead(de, profileName);
-    definirEstado(de, { agente: 'clientes', etapa: 'aguardando_tipo_horario', dados: {} });
-    return MSG.agendar();
+    definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_agendar', dados: {} });
+    return MSG.pedirNome();
   }
 
   // ── Opção 2 ──────────────────────────────────────────────────────────────
