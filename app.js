@@ -28,6 +28,9 @@ const PORT = process.env.PORT || 3000;
 app.use(express.urlencoded({ extended: false }));
 app.use(express.json());
 
+// Confia no proxy do Railway/Heroku
+app.set('trust proxy', 1);
+
 // Rate limiting — 60 req/min por IP
 const limiter = rateLimit({
   windowMs: 60 * 1000, // 1 minuto
