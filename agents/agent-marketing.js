@@ -46,7 +46,7 @@ const TEMPLATES_POST = [
   {
     tipo: 'depoimento',
     legenda: (tema) =>
-      `💬 *"${tema || 'O Pilates mudou minha vida. Minha postura e disposição melhoraram 100%!"}*"\n\n` +
+      `💬 *"${tema || 'O Pilates mudou minha vida. Minha postura e disposicao melhoraram 100%!'}*"\n\n` +
       `Nada nos deixa mais felizes do que ver a transformação dos nossos alunos! 🥰\n\n` +
       `Venha fazer parte dessa história!\n📍 ${BOOKING_LINK()}\n`,
     hashtags: '#Pilates #VollPilates #Depoimento #Transformação #ResultadosPilates #AlunoFeliz #Motivação #PilatesFunciona'
