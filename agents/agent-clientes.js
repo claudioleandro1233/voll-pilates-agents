@@ -177,14 +177,30 @@ async function processarMensagem(de, mensagem, profileName) {
     // Fluxo de agendamento: aguardando horário escolhido após mostrar opções
     if (estado.etapa === 'aguardando_tipo_horario') {
       limparEstado(de);
-      // Salva a preferência e encaminha para atendente
+
+      // Salva lead no CRM
       await Clientes.salvarCliente({
         nome: profileName || 'Desconhecido',
         whatsapp: de,
         status: 'Lead',
         observacoes: `Interesse: ${msgTrim}`
       }).catch(() => {});
-      await Logs.registrar('CLIENTES', 'INFO', `Interesse agendamento: ${de} - ${msgTrim}`);
+
+      // Notifica o studio sobre a solicitação
+      const numeroStudio = process.env.DONO_WHATSAPP;
+      const numeroAluno = de.replace('whatsapp:', '');
+      const msgStudio =
+        `🔔 *Nova solicitacao de agendamento!*\n\n` +
+        `👤 Aluno: *${profileName || 'Desconhecido'}*\n` +
+        `📱 WhatsApp: *${numeroAluno}*\n` +
+        `📝 Preferencia: *${msgTrim}*\n\n` +
+        `Verifique a disponibilidade e confirme com o aluno.`;
+
+      await enviarMensagem(numeroStudio, msgStudio).catch(e =>
+        logger.warn(`Falha ao notificar studio: ${e.message}`)
+      );
+
+      await Logs.registrar('CLIENTES', 'INFO', `Solicitacao agendamento: ${profileName} (${de}) - ${msgTrim}`);
       return MSG.encaminharAtendente();
     }
   }
