@@ -2,7 +2,7 @@
 require('dotenv').config();
 const express = require('express');
 const cron = require('node-cron');
-const { enviarMensagem, extrairDadosWebhook } = require('../utils/zapi');
+const { enviarMensagem, extrairDadosWebhook, normalizarNumero } = require('../utils/zapi');
 const { Clientes, Logs } = require('../utils/sheets');
 const { listarEventosDia } = require('../utils/calendar');
 const { obterEstado, definirEstado, limparEstado, atualizarDados } = require('../utils/state');
@@ -11,8 +11,15 @@ const logger = require('../utils/logger');
 const router = express.Router();
 
 const FORM_NPS_URL = process.env.FORM_NPS_URL || process.env.STUDIO_BOOKING_LINK || '#';
+const DONO = () => process.env.DONO_WHATSAPP;
 
-// ─── Mensagens padronizadas ──────────────────────────────────────────────────
+// ─── Tabela de preços ────────────────────────────────────────────────────────
+const PRECOS = {
+  Pilates:   { 1: { mensal: 185, trim: 167, sem: 148 }, 2: { mensal: 320, trim: 288, sem: 256 }, 3: { mensal: 465, trim: 419, sem: 372 }, 4: { mensal: 590, trim: 531, sem: 472 } },
+  Funcional: { 1: { mensal: 165, trim: 149, sem: 132 }, 2: { mensal: 280, trim: 252, sem: 224 }, 3: { mensal: 395, trim: 356, sem: 316 }, 4: { mensal: 495, trim: 446, sem: 396 } }
+};
+
+// ─── Mensagens ───────────────────────────────────────────────────────────────
 const MSG = {
 
   menu: () =>
@@ -23,296 +30,349 @@ const MSG = {
     `2️⃣ Ver meus agendamentos\n` +
     `3️⃣ Planos e valores\n` +
     `4️⃣ TotalPass / Welhub\n` +
-    `5️⃣ Endereco e horarios\n\n` +
+    `5️⃣ Endereco e horarios\n` +
+    `6️⃣ Falar com atendente\n\n` +
     `Digite o numero da opcao ou sua duvida.`,
 
   opcaoInvalida: () =>
-    `Opcao invalida. Digite 1-5 para o menu.\n\n` +
-    `1️⃣ Agendar uma aula\n` +
-    `2️⃣ Ver meus agendamentos\n` +
-    `3️⃣ Planos e valores\n` +
-    `4️⃣ TotalPass / Welhub\n` +
-    `5️⃣ Endereco e horarios`,
+    `Opcao invalida. Digite 1-6 para o menu.\n\n` +
+    `1️⃣ Agendar  2️⃣ Agendamentos  3️⃣ Planos\n` +
+    `4️⃣ TotalPass  5️⃣ Endereco  6️⃣ Atendente`,
 
-  pedirNome: () =>
-    `Otimo! 😊 Para agendar, primeiro me diz seu *nome completo*:`,
+  // ── Agendamento ──
+  pedirNomeAgendar: () => `Otimo! 😊 Para agendar, primeiro me diz seu *nome completo*:`,
 
-  pedirModalidade: (nome) =>
-    `Obrigada, *${nome}*! 🙏\n\n` +
-    `Qual modalidade voce prefere?\n\n` +
-    `1️⃣ Pilates\n` +
-    `2️⃣ Funcional`,
+  pedirModalidadeAgendar: (nome) =>
+    `Obrigada, *${nome}*! 🙏\n\nQual modalidade voce prefere?\n\n1️⃣ Pilates\n2️⃣ Funcional`,
 
   pedirHorario: (modalidade) =>
-    `Otimo! *${modalidade}* 💪\n\n` +
-    `Qual horario prefere?\n\n` +
+    `Otimo! *${modalidade}* 💪\n\nQual horario prefere?\n\n` +
     (modalidade === 'Pilates'
       ? `*Manha:* 07h, 08h, 09h, 10h\n*Tarde:* 15h, 16h, 17h, 18h, 19h, 20h\n*Sabado:* 08h, 09h, 10h, 11h`
       : `*Manha:* 07h, 08h, 09h, 10h, 11h, 12h\n*Tarde:* 15h, 16h, 17h (18h/19h so tercas)\n*Sabado:* 08h, 09h, 10h, 11h`) +
     `\n\nDigite o horario. Ex: *10h* ou *18h*`,
 
   pedirDia: (horario) =>
-    `Perfeito, *${horario}*! 📅\n\n` +
-    `Qual dia da semana prefere?\n\n` +
-    `1️⃣ Segunda\n` +
-    `2️⃣ Terca\n` +
-    `3️⃣ Quarta\n` +
-    `4️⃣ Quinta\n` +
-    `5️⃣ Sexta\n` +
-    `6️⃣ Sabado`,
+    `Perfeito, *${horario}*! 📅\n\nQual dia da semana prefere?\n\n` +
+    `1️⃣ Segunda\n2️⃣ Terca\n3️⃣ Quarta\n4️⃣ Quinta\n5️⃣ Sexta\n6️⃣ Sabado`,
 
   encaminharAtendente: () =>
-    `Vou encaminhar para um atendente para ver disponibilidade de horario. Aguarde! ⏳`,
+    `Vou encaminhar para um atendente para ver disponibilidade. Aguarde! ⏳`,
 
-  pedirNomeOuTelefone: () =>
-    `Oi! Para ver seus agendamentos, informe:\n*Nome ou telefone:*`,
+  agendamentoConfirmado: (dados) =>
+    `✅ *Seu agendamento foi confirmado!*\n\n` +
+    `👤 ${dados.nome}\n` +
+    `🏋️ ${dados.modalidade}\n` +
+    `📅 ${dados.dia}\n` +
+    `⏰ ${dados.horario}\n\n` +
+    `📍 Av. Rubens Montanaro de Borba, 180B\n\n` +
+    `Qualquer duvida, estamos aqui! 😊`,
 
-  agendamentosEncontrados: (nome, lista) =>
-    `${nome}, suas aulas:\n${lista}\n\nPrecisa alterar? Digite *1 sim / 2 nao*.`,
+  // ── Planos ──
+  pedirNomePlanos: () => `Para te mostrar o plano ideal, primeiro me diz seu *nome completo*:`,
 
-  agendamentosNaoEncontrados: () =>
-    `Nenhum agendamento no seu nome. Quer agendar agora? Digite *1*.`,
+  pedirModalidadePlanos: (nome) =>
+    `Ola, *${nome}*! 😊\n\nQual modalidade te interessa?\n\n1️⃣ Pilates\n2️⃣ Funcional`,
 
-  planos: () =>
-    `Aqui os planos do Voll Pilates Studio 🧘‍♀️:\n\n` +
-    `*PILATES*\n` +
-    `1x/semana - Mensal: R$ 185 | Trim: R$ 167 | Sem: R$ 148\n` +
-    `2x/semana - Mensal: R$ 320 | Trim: R$ 288 | Sem: R$ 256\n` +
-    `3x/semana - Mensal: R$ 465 | Trim: R$ 419 | Sem: R$ 372\n` +
-    `4x/semana - Mensal: R$ 590 | Trim: R$ 531 | Sem: R$ 472\n\n` +
-    `*FUNCIONAL*\n` +
-    `1x/semana - Mensal: R$ 165 | Trim: R$ 149 | Sem: R$ 132\n` +
-    `2x/semana - Mensal: R$ 280 | Trim: R$ 252 | Sem: R$ 224\n` +
-    `3x/semana - Mensal: R$ 395 | Trim: R$ 356 | Sem: R$ 316\n` +
-    `4x/semana - Mensal: R$ 495 | Trim: R$ 446 | Sem: R$ 396\n\n` +
-    `Pix/cartao/boleto. Quer agendar? Digite *1*.`,
+  pedirFrequencia: (modalidade) =>
+    `*${modalidade}* — Quantas vezes por semana voce pretende treinar?\n\n` +
+    `1️⃣ 1x por semana\n2️⃣ 2x por semana\n3️⃣ 3x por semana\n4️⃣ 4x por semana`,
 
+  mostrarPlano: (nome, modalidade, freq) => {
+    const p = PRECOS[modalidade][freq];
+    return (
+      `💰 *Plano para voce, ${nome}:*\n\n` +
+      `🏋️ Modalidade: *${modalidade}*\n` +
+      `📅 Frequencia: *${freq}x/semana*\n\n` +
+      `*Mensal:* R$ ${p.mensal}\n` +
+      `*Trimestral:* R$ ${p.trim}/mes (economize ${p.mensal - p.trim}/mes)\n` +
+      `*Semestral:* R$ ${p.sem}/mes (economize ${p.mensal - p.sem}/mes)\n\n` +
+      `💳 Pix, cartao ou boleto.\n\n` +
+      `Quer agendar uma aula? Digite *1*.\n` +
+      `Prefere falar com atendente? Digite *9*.`
+    );
+  },
+
+  // ── Atendente ──
+  aguardandoAtendente: (nome) =>
+    `Ola, *${nome}*! 👋 Um atendente vai entrar em contato em breve.\n\nSe preferir, pode ligar ou mandar mensagem diretamente:\n📱 ${process.env.STUDIO_PHONE || ''}`,
+
+  // ── Ver agendamentos ──
+  pedirNomeOuTelefone: () => `Para ver seus agendamentos, informe seu *nome ou telefone*:`,
+  agendamentosEncontrados: (nome, lista) => `${nome}, suas aulas:\n${lista}\n\nPrecisa alterar? Digite *1 sim / 2 nao*.`,
+  agendamentosNaoEncontrados: () => `Nenhum agendamento no seu nome. Quer agendar agora? Digite *1*.`,
+
+  // ── Outros ──
   totalpass: () =>
-    `Aqui os planos aceitos no Voll Pilates Studio:\n\n` +
-    `*FUNCIONAL*\n` +
-    `TP3 TotalPass\n` +
-    `Silver+ Welhub ou superior\n\n` +
-    `*PILATES*\n` +
-    `TP4 TotalPass\n` +
-    `Silver+ Welhub ou superior\n\n` +
-    `Lembre-se de sempre mostrar seu check-in na recepcao no dia de sua aula. Agendamentos sem cancelamento previo terao um ganho da propria empresa PASS.\n\n` +
-    `Se nao esta dando certo o agendamento, digite *1* e informe a situacao.`,
+    `Planos aceitos no Voll Pilates Studio:\n\n` +
+    `*FUNCIONAL*\nTP3 TotalPass\nSilver+ Welhub ou superior\n\n` +
+    `*PILATES*\nTP4 TotalPass\nSilver+ Welhub ou superior\n\n` +
+    `Lembre-se de mostrar seu check-in na recepcao.\n\n` +
+    `Dificuldade no agendamento? Digite *6* para falar com atendente.`,
 
   endereco: () =>
     `📍 *Endereco:* Av. Rubens Montanaro de Borba, 180B\n` +
     `https://maps.app.goo.gl/cHDecPZZRcNksCyE7 (estac. gratis).\n\n` +
-    `🕒 *Horarios do estudio:*\n` +
-    `Seg-Sex: 07h-13h | 15h-21h\n` +
-    `Sab: 08h-12h\n` +
-    `Dom: Fechado.\n\n` +
-    `Quer horarios de aulas ou agendar? Digite *1*.`,
+    `🕒 *Horarios:*\nSeg-Sex: 07h-13h | 15h-21h\nSab: 08h-12h\nDom: Fechado.\n\n` +
+    `Quer agendar? Digite *1*.`,
 
   lembrete: (dados) =>
     `⏰ *Lembrete da Voll Pilates!*\n\nOla, *${dados.nome}*! 👋\n` +
     `Sua aula e *amanha* as *${dados.horario}*.\n\n` +
-    `📍 Av. Rubens Montanaro de Borba, 180B\n\n` +
-    `Qualquer duvida, so chamar! 😊`,
+    `📍 Av. Rubens Montanaro de Borba, 180B\n\nQualquer duvida, so chamar! 😊`,
 
   nps: (nome) =>
-    `🌟 Ola, *${nome}*! Como foi sua aula hoje?\n` +
-    `Nos ajude com uma avaliacao rapida:\n\n` +
-    `${FORM_NPS_URL}\n\n` +
-    `Ou responda aqui de 0 a 10:\n*(0 = pessimo, 10 = excelente)*`,
+    `🌟 Ola, *${nome}*! Como foi sua aula hoje?\nResponda de 0 a 10:\n*(0 = pessimo, 10 = excelente)*`,
 
-  erroGeral: () =>
-    `Desculpe, ocorreu um erro. Por favor, tente novamente.`
+  erroGeral: () => `Desculpe, ocorreu um erro. Por favor, tente novamente.`
 };
 
-// ─── Skill: capturar lead ────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 async function capturarLead(de, profileName) {
   try {
     const existente = await Clientes.buscarPorWhatsApp(de);
     if (!existente) {
-      await Clientes.salvarCliente({
-        nome: profileName || 'Desconhecido',
-        whatsapp: de,
-        status: 'Lead'
-      });
-      logger.info(`✅ Novo lead: ${profileName} (${de})`);
+      await Clientes.salvarCliente({ nome: profileName || 'Desconhecido', whatsapp: de, status: 'Lead' });
     }
-  } catch (erro) {
-    logger.warn(`Falha ao capturar lead: ${erro.message}`);
+  } catch (e) {
+    logger.warn(`Falha ao capturar lead: ${e.message}`);
   }
 }
 
-// ─── Skill: ver agendamentos ─────────────────────────────────────────────────
-async function verAgendamentos(de, mensagem, estado) {
-  const etapa = estado?.etapa || 'pedir_nome';
-
-  if (etapa === 'pedir_nome') {
-    definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_agendamento', dados: {} });
-    return MSG.pedirNomeOuTelefone();
-  }
-
-  if (etapa === 'aguardando_nome_agendamento') {
-    const busca = mensagem.trim();
-    try {
-      const resultado = await Clientes.buscarPorWhatsApp(de);
-      const nome = resultado?.dados?.[1] || busca;
-      const eventos = await require('../utils/calendar').eventosCliente(busca);
-
-      limparEstado(de);
-
-      if (!eventos || eventos.length === 0) {
-        return MSG.agendamentosNaoEncontrados();
-      }
-
-      const lista = eventos.map(ev => {
-        const inicio = new Date(ev.start?.dateTime || ev.start?.date);
-        const dia = inicio.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit' });
-        const hora = inicio.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-        return `✅ ${dia} ${hora} (${ev.summary?.replace(/Pilates — |Funcional — /i, '') || 'aula'})`;
-      }).join('\n');
-
-      return MSG.agendamentosEncontrados(nome, lista);
-    } catch (erro) {
-      limparEstado(de);
-      logger.error(`Erro ao buscar agendamentos: ${erro.message}`);
-      return MSG.agendamentosNaoEncontrados();
-    }
-  }
+async function notificarStudio(titulo, campos) {
+  const linhas = Object.entries(campos).map(([k, v]) => `${k}: *${v}*`).join('\n');
+  await enviarMensagem(DONO(), `🔔 *${titulo}*\n\n${linhas}`).catch(e =>
+    logger.warn(`Falha notificar studio: ${e.message}`)
+  );
 }
 
-// ─── Roteador de mensagens ───────────────────────────────────────────────────
+// ─── Comandos do dono (respostas para alunos) ────────────────────────────────
+// /confirmar 5511999998888 Pilates Quarta 10h
+// /msg 5511999998888 Ola, seu horario esta confirmado!
+async function processarComandoDono(mensagem) {
+  const msgTrim = mensagem.trim();
+
+  // /confirmar <numero> <modalidade> <dia> <horario>
+  const confirmarMatch = msgTrim.match(/^\/confirmar\s+(\d+)\s+(\w+)\s+(\w+)\s+(\w+)/i);
+  if (confirmarMatch) {
+    const [, numero, modalidade, dia, horario] = confirmarMatch;
+    const para = `whatsapp:+${normalizarNumero(numero)}`;
+    await enviarMensagem(para, MSG.agendamentoConfirmado({ nome: 'Aluno', modalidade, dia, horario }));
+    return `✅ Confirmacao enviada para +${numero}`;
+  }
+
+  // /msg <numero> <texto livre>
+  const msgMatch = msgTrim.match(/^\/msg\s+(\d+)\s+(.+)/is);
+  if (msgMatch) {
+    const [, numero, texto] = msgMatch;
+    const para = `whatsapp:+${normalizarNumero(numero)}`;
+    await enviarMensagem(para, texto.trim());
+    return `✅ Mensagem enviada para +${numero}`;
+  }
+
+  // /ajuda — lista comandos disponíveis
+  if (/^\/ajuda$/i.test(msgTrim)) {
+    return (
+      `*Comandos disponíveis:*\n\n` +
+      `*/confirmar* [numero] [modalidade] [dia] [horario]\n` +
+      `Ex: /confirmar 5511999998888 Pilates Quarta 10h\n\n` +
+      `*/msg* [numero] [texto]\n` +
+      `Ex: /msg 5511999998888 Seu horario esta confirmado!\n\n` +
+      `*/ajuda* — lista os comandos`
+    );
+  }
+
+  return null; // Não é comando
+}
+
+// ─── Roteador principal ───────────────────────────────────────────────────────
 async function processarMensagem(de, mensagem, profileName) {
   const msgTrim = mensagem.trim();
   const msgLower = msgTrim.toLowerCase();
   const estado = obterEstado(de);
+  const donoNumero = normalizarNumero(DONO());
+  const remetenteNumero = normalizarNumero(de);
 
-  // Continua fluxo ativo
+  // ── Comandos do dono ──────────────────────────────────────────────────────
+  if (remetenteNumero === donoNumero && msgTrim.startsWith('/')) {
+    const resposta = await processarComandoDono(msgTrim);
+    return resposta || `Comando nao reconhecido. Digite */ajuda* para ver os comandos.`;
+  }
+
+  // ── Fluxos ativos ────────────────────────────────────────────────────────
   if (estado?.agente === 'clientes') {
-    // Fluxo de ver agendamentos
+
+    // Ver agendamentos
     if (estado.etapa === 'aguardando_nome_agendamento') {
-      return verAgendamentos(de, msgTrim, estado);
+      const busca = msgTrim;
+      try {
+        const resultado = await Clientes.buscarPorWhatsApp(de);
+        const nome = resultado?.dados?.[1] || busca;
+        const eventos = await require('../utils/calendar').eventosCliente(busca);
+        limparEstado(de);
+        if (!eventos || eventos.length === 0) return MSG.agendamentosNaoEncontrados();
+        const lista = eventos.map(ev => {
+          const inicio = new Date(ev.start?.dateTime || ev.start?.date);
+          return `✅ ${inicio.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit' })} ${inicio.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+        }).join('\n');
+        return MSG.agendamentosEncontrados(nome, lista);
+      } catch (e) {
+        limparEstado(de);
+        return MSG.agendamentosNaoEncontrados();
+      }
     }
-    // Etapa 1: coletando nome
+
+    // ── Fluxo Agendamento ──
     if (estado.etapa === 'aguardando_nome_agendar') {
       if (msgTrim.length < 3) return `Por favor, informe seu nome completo.`;
       atualizarDados(de, { nome: msgTrim });
-      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_modalidade', dados: { nome: msgTrim } });
-      return MSG.pedirModalidade(msgTrim);
+      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_modalidade_agendar', dados: { nome: msgTrim } });
+      return MSG.pedirModalidadeAgendar(msgTrim);
     }
 
-    // Etapa 2: coletando modalidade
-    if (estado.etapa === 'aguardando_modalidade') {
+    if (estado.etapa === 'aguardando_modalidade_agendar') {
       let modalidade = '';
       if (msgLower === '1' || /pilates/i.test(msgLower)) modalidade = 'Pilates';
       else if (msgLower === '2' || /funcional/i.test(msgLower)) modalidade = 'Funcional';
       else return `Por favor, escolha:\n1️⃣ Pilates\n2️⃣ Funcional`;
-
       atualizarDados(de, { modalidade });
-      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_horario', dados: { ...estado.dados, modalidade } });
+      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_horario_agendar', dados: { ...estado.dados, modalidade } });
       return MSG.pedirHorario(modalidade);
     }
 
-    // Etapa 3: coletando horário
-    if (estado.etapa === 'aguardando_horario') {
-      const horarioMatch = msgTrim.match(/\d{1,2}h?/i);
-      if (!horarioMatch) return `Por favor, informe um horario valido. Ex: *10h* ou *18h*`;
-
-      const horario = horarioMatch[0].toLowerCase().replace(/h$/, '') + 'h';
+    if (estado.etapa === 'aguardando_horario_agendar') {
+      const m = msgTrim.match(/\d{1,2}/);
+      if (!m) return `Informe um horario valido. Ex: *10h* ou *18h*`;
+      const horario = m[0] + 'h';
       atualizarDados(de, { horario });
-      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_dia', dados: { ...estado.dados, horario } });
+      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_dia_agendar', dados: { ...estado.dados, horario } });
       return MSG.pedirDia(horario);
     }
 
-    // Etapa 4: coletando dia → notifica studio
-    if (estado.etapa === 'aguardando_dia') {
-      const dias = ['Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado'];
+    if (estado.etapa === 'aguardando_dia_agendar') {
       const diaMap = {
         '1': 'Segunda', 'segunda': 'Segunda',
-        '2': 'Terca', 'terca': 'Terca', 'terca-feira': 'Terca',
-        '3': 'Quarta', 'quarta': 'Quarta', 'quarta-feira': 'Quarta',
-        '4': 'Quinta', 'quinta': 'Quinta', 'quinta-feira': 'Quinta',
-        '5': 'Sexta', 'sexta': 'Sexta', 'sexta-feira': 'Sexta',
-        '6': 'Sabado', 'sabado': 'Sabado', 'sábado': 'Sabado'
+        '2': 'Terca', 'terca': 'Terca',
+        '3': 'Quarta', 'quarta': 'Quarta',
+        '4': 'Quinta', 'quinta': 'Quinta',
+        '5': 'Sexta', 'sexta': 'Sexta',
+        '6': 'Sabado', 'sabado': 'Sabado', 'sabado': 'Sabado'
       };
-
       const dia = diaMap[msgLower];
-      if (!dia) return `Por favor, escolha:\n1️⃣ Segunda\n2️⃣ Terca\n3️⃣ Quarta\n4️⃣ Quinta\n5️⃣ Sexta\n6️⃣ Sabado`;
+      if (!dia) return `Escolha:\n1️⃣ Segunda\n2️⃣ Terca\n3️⃣ Quarta\n4️⃣ Quinta\n5️⃣ Sexta\n6️⃣ Sabado`;
 
-      const { nome, modalidade, horario } = { ...estado.dados, dia };
+      const { nome, modalidade, horario } = estado.dados;
       limparEstado(de);
 
-      // Salva lead no CRM
-      await Clientes.salvarCliente({
-        nome: nome || profileName || 'Desconhecido',
-        whatsapp: de,
-        status: 'Lead',
-        observacoes: `${modalidade} - ${dia} - ${horario}`
-      }).catch(() => {});
+      await Clientes.salvarCliente({ nome, whatsapp: de, status: 'Lead', observacoes: `${modalidade} - ${dia} - ${horario}` }).catch(() => {});
 
-      // Notifica o studio
-      const numeroAluno = de.replace('whatsapp:', '');
-      const msgStudio =
-        `🔔 *Nova solicitacao de agendamento!*\n\n` +
-        `👤 Aluno: *${nome}*\n` +
-        `📱 WhatsApp: *${numeroAluno}*\n` +
-        `🏋️ Modalidade: *${modalidade}*\n` +
-        `📅 Dia: *${dia}*\n` +
-        `⏰ Horario: *${horario}*\n\n` +
-        `Verifique a disponibilidade e confirme com o aluno.`;
-
-      await enviarMensagem(process.env.DONO_WHATSAPP, msgStudio).catch(e =>
-        logger.warn(`Falha ao notificar studio: ${e.message}`)
-      );
+      await notificarStudio('Nova solicitacao de agendamento!', {
+        '👤 Aluno': nome,
+        '📱 WhatsApp': normalizarNumero(de),
+        '🏋️ Modalidade': modalidade,
+        '📅 Dia': dia,
+        '⏰ Horario': horario,
+        '\nResponder': `\n/confirmar ${normalizarNumero(de)} ${modalidade} ${dia} ${horario}`
+      });
 
       await Logs.registrar('CLIENTES', 'INFO', `Agendamento: ${nome} - ${modalidade} ${dia} ${horario}`);
       return MSG.encaminharAtendente();
     }
+
+    // ── Fluxo Planos ──
+    if (estado.etapa === 'aguardando_nome_planos') {
+      if (msgTrim.length < 3) return `Por favor, informe seu nome completo.`;
+      atualizarDados(de, { nome: msgTrim });
+      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_modalidade_planos', dados: { nome: msgTrim } });
+      return MSG.pedirModalidadePlanos(msgTrim);
+    }
+
+    if (estado.etapa === 'aguardando_modalidade_planos') {
+      let modalidade = '';
+      if (msgLower === '1' || /pilates/i.test(msgLower)) modalidade = 'Pilates';
+      else if (msgLower === '2' || /funcional/i.test(msgLower)) modalidade = 'Funcional';
+      else return `Por favor, escolha:\n1️⃣ Pilates\n2️⃣ Funcional`;
+      atualizarDados(de, { modalidade });
+      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_frequencia_planos', dados: { ...estado.dados, modalidade } });
+      return MSG.pedirFrequencia(modalidade);
+    }
+
+    if (estado.etapa === 'aguardando_frequencia_planos') {
+      const freqMap = { '1': 1, '2': 2, '3': 3, '4': 4 };
+      const freq = freqMap[msgLower];
+      if (!freq) return `Escolha:\n1️⃣ 1x/semana\n2️⃣ 2x/semana\n3️⃣ 3x/semana\n4️⃣ 4x/semana`;
+      const { nome, modalidade } = estado.dados;
+      limparEstado(de);
+      return MSG.mostrarPlano(nome, modalidade, freq);
+    }
+
+    // ── Fluxo Atendente ──
+    if (estado.etapa === 'aguardando_nome_atendente') {
+      const nome = msgTrim.length >= 3 ? msgTrim : profileName;
+      limparEstado(de);
+
+      await notificarStudio('Aluno quer falar com atendente!', {
+        '👤 Nome': nome,
+        '📱 WhatsApp': normalizarNumero(de),
+        '\nResponder': `\n/msg ${normalizarNumero(de)} [sua mensagem]`
+      });
+
+      await Logs.registrar('CLIENTES', 'INFO', `Atendente solicitado: ${nome} (${de})`);
+      return MSG.aguardandoAtendente(nome);
+    }
   }
 
-  // ── Opção 1 ou palavras relacionadas a agendar ───────────────────────────
-  if (msgLower === '1' || /agendar|marcar|quero aula|aula/i.test(msgLower)) {
+  // ── Opção 9 — atendente (dentro de outros fluxos) ────────────────────────
+  if (msgLower === '9' || /atendente|humano|falar com/i.test(msgLower)) {
+    definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_atendente', dados: {} });
+    return `Para te conectar com um atendente, me diz seu *nome*:`;
+  }
+
+  // ── Opcoes do menu ────────────────────────────────────────────────────────
+  if (msgLower === '1' || /agendar|marcar|quero aula/i.test(msgLower)) {
     await capturarLead(de, profileName);
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_agendar', dados: {} });
-    return MSG.pedirNome();
+    return MSG.pedirNomeAgendar();
   }
 
-  // ── Opção 2 ──────────────────────────────────────────────────────────────
-  if (msgLower === '2' || /meus agendamentos|minhas aulas|ver aula|agendamento/i.test(msgLower)) {
-    return verAgendamentos(de, msgTrim, { etapa: 'pedir_nome' });
+  if (msgLower === '2' || /meus agendamentos|ver aula/i.test(msgLower)) {
+    definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_agendamento', dados: {} });
+    return MSG.pedirNomeOuTelefone();
   }
 
-  // ── Opção 3 ──────────────────────────────────────────────────────────────
   if (msgLower === '3' || /plano|valor|preco|mensalidade|quanto custa/i.test(msgLower)) {
-    return MSG.planos();
+    definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_planos', dados: {} });
+    return MSG.pedirNomePlanos();
   }
 
-  // ── Opção 4 ──────────────────────────────────────────────────────────────
-  if (msgLower === '4' || /totalpass|welhub|gympass|beneficio|convenio/i.test(msgLower)) {
+  if (msgLower === '4' || /totalpass|welhub|gympass/i.test(msgLower)) {
     return MSG.totalpass();
   }
 
-  // ── Opção 5 ──────────────────────────────────────────────────────────────
-  if (msgLower === '5' || /endereco|onde|localizacao|como chegar|horario do studio/i.test(msgLower)) {
+  if (msgLower === '5' || /endereco|onde|localizacao|como chegar/i.test(msgLower)) {
     return MSG.endereco();
   }
 
-  // ── Saudações → menu ────────────────────────────────────────────────────
-  if (/^(oi|ola|bom dia|boa tarde|boa noite|hey|hi|hello|menu|inicio|start)$/i.test(msgLower)) {
+  if (msgLower === '6' || /atendente|falar com alguem|humano/i.test(msgLower)) {
+    definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_atendente', dados: {} });
+    return `Para te conectar com um atendente, me diz seu *nome*:`;
+  }
+
+  if (/^(oi|ola|bom dia|boa tarde|boa noite|hey|hi|menu|inicio|start)$/i.test(msgLower)) {
     await capturarLead(de, profileName);
     return MSG.menu();
   }
 
-  // ── NPS: resposta numérica 0-10 ──────────────────────────────────────────
-  if (/^\d+$/.test(msgLower) && parseInt(msgLower) >= 0 && parseInt(msgLower) <= 10) {
-    const nota = parseInt(msgLower);
-    // Evita interpretar opções do menu como NPS
-    if (nota >= 1 && nota <= 5) {
-      return MSG.opcaoInvalida();
+  // NPS
+  if (/^\d+$/.test(msgLower)) {
+    const n = parseInt(msgLower);
+    if (n >= 0 && n <= 10 && n > 6) {
+      await Clientes.salvarNPS({ whatsapp: de, nome: profileName, nota: n });
+      const emo = n >= 9 ? '🌟' : '😊';
+      return `${emo} Obrigada pela avaliacao *${n}/10*, ${profileName}! 💙`;
     }
-    await Clientes.salvarNPS({ whatsapp: de, nome: profileName, nota });
-    const emo = nota >= 9 ? '🌟' : nota >= 7 ? '😊' : '😔';
-    return `${emo} Obrigada pela avaliacao *${nota}/10*, ${profileName}! Seu feedback e muito importante para nos! 💙`;
   }
 
-  // ── Fallback: opção inválida ─────────────────────────────────────────────
   await capturarLead(de, profileName);
   return MSG.opcaoInvalida();
 }
@@ -321,17 +381,14 @@ async function processarMensagem(de, mensagem, profileName) {
 router.post('/', async (req, res) => {
   try {
     const { de, mensagem, profileName, isGroup, fromMe } = extrairDadosWebhook(req.body);
-
     if (!de || !mensagem || fromMe || isGroup) return res.status(200).send('OK');
 
-    logger.info(`[CLIENTES] Mensagem de ${de}: "${mensagem}"`);
-
+    logger.info(`[CLIENTES] ${de}: "${mensagem}"`);
     const resposta = await processarMensagem(de, mensagem, profileName);
     await enviarMensagem(de, resposta);
-
     res.status(200).send('OK');
   } catch (erro) {
-    logger.error(`[CLIENTES] Erro no webhook: ${erro.message}`);
+    logger.error(`[CLIENTES] Erro: ${erro.message}`);
     const { de } = extrairDadosWebhook(req.body);
     if (de) await enviarMensagem(de, MSG.erroGeral()).catch(() => {});
     res.status(500).json({ erro: 'Erro interno' });
@@ -339,59 +396,37 @@ router.post('/', async (req, res) => {
 });
 
 // ─── Crons ───────────────────────────────────────────────────────────────────
-
-// Lembretes 24h antes — todo dia às 08:00
 cron.schedule('0 8 * * 1-6', async () => {
-  logger.info('[CRON] Enviando lembretes de aula...');
   try {
     const amanha = new Date();
     amanha.setDate(amanha.getDate() + 1);
     const eventos = await listarEventosDia(amanha);
-
-    for (const evento of eventos) {
-      const desc = evento.description || '';
-      const wpMatch = desc.match(/WhatsApp: ([\+\d]+)/);
-      const nomeMatch = desc.match(/Cliente: (.+)/);
-      if (!wpMatch) continue;
-
-      const whatsapp = wpMatch[1];
-      const nome = nomeMatch ? nomeMatch[1].trim() : 'cliente';
-      const inicio = new Date(evento.start?.dateTime);
-      const horario = inicio.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
-
-      await enviarMensagem(`whatsapp:${whatsapp}`, MSG.lembrete({ nome, horario }));
-      logger.info(`✅ Lembrete enviado para ${nome}`);
+    for (const ev of eventos) {
+      const desc = ev.description || '';
+      const wpM = desc.match(/WhatsApp: ([\+\d]+)/);
+      const nomeM = desc.match(/Cliente: (.+)/);
+      if (!wpM) continue;
+      const horario = new Date(ev.start?.dateTime).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+      await enviarMensagem(`whatsapp:+${normalizarNumero(wpM[1])}`, MSG.lembrete({ nome: nomeM?.[1]?.trim() || 'aluno', horario }));
       await new Promise(r => setTimeout(r, 1000));
     }
-  } catch (erro) {
-    logger.error(`[CRON LEMBRETES] ${erro.message}`);
-  }
+  } catch (e) { logger.error(`[CRON LEMBRETES] ${e.message}`); }
 }, { timezone: 'America/Sao_Paulo' });
 
-// NPS pós-aula — todo dia às 12:00
 cron.schedule('0 12 * * 1-6', async () => {
-  logger.info('[CRON] Enviando NPS pos-aula...');
   try {
     const hoje = new Date();
     const eventos = await listarEventosDia(hoje);
-
-    for (const evento of eventos) {
-      const desc = evento.description || '';
-      const wpMatch = desc.match(/WhatsApp: ([\+\d]+)/);
-      const nomeMatch = desc.match(/Cliente: (.+)/);
-      const inicio = new Date(evento.start?.dateTime);
-
-      if (inicio > hoje || !wpMatch) continue;
-
-      const whatsapp = wpMatch[1];
-      const nome = nomeMatch ? nomeMatch[1].trim() : 'cliente';
-
-      await enviarMensagem(`whatsapp:${whatsapp}`, MSG.nps(nome));
+    for (const ev of eventos) {
+      const desc = ev.description || '';
+      const wpM = desc.match(/WhatsApp: ([\+\d]+)/);
+      const nomeM = desc.match(/Cliente: (.+)/);
+      const inicio = new Date(ev.start?.dateTime);
+      if (inicio > hoje || !wpM) continue;
+      await enviarMensagem(`whatsapp:+${normalizarNumero(wpM[1])}`, MSG.nps(nomeM?.[1]?.trim() || 'aluno'));
       await new Promise(r => setTimeout(r, 1000));
     }
-  } catch (erro) {
-    logger.error(`[CRON NPS] ${erro.message}`);
-  }
+  } catch (e) { logger.error(`[CRON NPS] ${e.message}`); }
 }, { timezone: 'America/Sao_Paulo' });
 
 module.exports = router;
