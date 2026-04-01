@@ -37,16 +37,29 @@ const MSG = {
   pedirNome: () =>
     `Otimo! 😊 Para agendar, primeiro me diz seu *nome completo*:`,
 
-  agendar: (nome) =>
-    `Perfeito, *${nome}*! Escolha o tipo e horario:\n\n` +
-    `*PILATES*\n` +
-    `Manha: 07h, 08h, 09h, 10h\n` +
-    `Tarde: 15h, 16h, 17h, 18h, 19h, 20h\n\n` +
-    `*FUNCIONAL*\n` +
-    `Manha: 07h, 08h, 09h, 10h, 11h, 12h\n` +
-    `Tarde: 15h, 16h, 17h (18h/19h so tercas)\n\n` +
-    `*Sabado:* 08h, 09h, 10h, 11h\n\n` +
-    `Diga: "Pilates terca 10h" ou "Funcional sex 16h".`,
+  pedirModalidade: (nome) =>
+    `Obrigada, *${nome}*! 🙏\n\n` +
+    `Qual modalidade voce prefere?\n\n` +
+    `1️⃣ Pilates\n` +
+    `2️⃣ Funcional`,
+
+  pedirHorario: (modalidade) =>
+    `Otimo! *${modalidade}* 💪\n\n` +
+    `Qual horario prefere?\n\n` +
+    (modalidade === 'Pilates'
+      ? `*Manha:* 07h, 08h, 09h, 10h\n*Tarde:* 15h, 16h, 17h, 18h, 19h, 20h\n*Sabado:* 08h, 09h, 10h, 11h`
+      : `*Manha:* 07h, 08h, 09h, 10h, 11h, 12h\n*Tarde:* 15h, 16h, 17h (18h/19h so tercas)\n*Sabado:* 08h, 09h, 10h, 11h`) +
+    `\n\nDigite o horario. Ex: *10h* ou *18h*`,
+
+  pedirDia: (horario) =>
+    `Perfeito, *${horario}*! 📅\n\n` +
+    `Qual dia da semana prefere?\n\n` +
+    `1️⃣ Segunda\n` +
+    `2️⃣ Terca\n` +
+    `3️⃣ Quarta\n` +
+    `4️⃣ Quinta\n` +
+    `5️⃣ Sexta\n` +
+    `6️⃣ Sabado`,
 
   encaminharAtendente: () =>
     `Vou encaminhar para um atendente para ver disponibilidade de horario. Aguarde! ⏳`,
@@ -177,42 +190,79 @@ async function processarMensagem(de, mensagem, profileName) {
     if (estado.etapa === 'aguardando_nome_agendamento') {
       return verAgendamentos(de, msgTrim, estado);
     }
-    // Fluxo de agendamento: coletando nome
+    // Etapa 1: coletando nome
     if (estado.etapa === 'aguardando_nome_agendar') {
-      const nome = msgTrim;
-      if (nome.length < 3) return `Por favor, informe seu nome completo.`;
-      atualizarDados(de, { nome });
-      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_tipo_horario', dados: { nome } });
-      return MSG.agendar(nome);
+      if (msgTrim.length < 3) return `Por favor, informe seu nome completo.`;
+      atualizarDados(de, { nome: msgTrim });
+      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_modalidade', dados: { nome: msgTrim } });
+      return MSG.pedirModalidade(msgTrim);
     }
-    // Fluxo de agendamento: aguardando horário escolhido após mostrar opções
-    if (estado.etapa === 'aguardando_tipo_horario') {
+
+    // Etapa 2: coletando modalidade
+    if (estado.etapa === 'aguardando_modalidade') {
+      let modalidade = '';
+      if (msgLower === '1' || /pilates/i.test(msgLower)) modalidade = 'Pilates';
+      else if (msgLower === '2' || /funcional/i.test(msgLower)) modalidade = 'Funcional';
+      else return `Por favor, escolha:\n1️⃣ Pilates\n2️⃣ Funcional`;
+
+      atualizarDados(de, { modalidade });
+      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_horario', dados: { ...estado.dados, modalidade } });
+      return MSG.pedirHorario(modalidade);
+    }
+
+    // Etapa 3: coletando horário
+    if (estado.etapa === 'aguardando_horario') {
+      const horarioMatch = msgTrim.match(/\d{1,2}h?/i);
+      if (!horarioMatch) return `Por favor, informe um horario valido. Ex: *10h* ou *18h*`;
+
+      const horario = horarioMatch[0].toLowerCase().replace(/h$/, '') + 'h';
+      atualizarDados(de, { horario });
+      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_dia', dados: { ...estado.dados, horario } });
+      return MSG.pedirDia(horario);
+    }
+
+    // Etapa 4: coletando dia → notifica studio
+    if (estado.etapa === 'aguardando_dia') {
+      const dias = ['Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado'];
+      const diaMap = {
+        '1': 'Segunda', 'segunda': 'Segunda',
+        '2': 'Terca', 'terca': 'Terca', 'terca-feira': 'Terca',
+        '3': 'Quarta', 'quarta': 'Quarta', 'quarta-feira': 'Quarta',
+        '4': 'Quinta', 'quinta': 'Quinta', 'quinta-feira': 'Quinta',
+        '5': 'Sexta', 'sexta': 'Sexta', 'sexta-feira': 'Sexta',
+        '6': 'Sabado', 'sabado': 'Sabado', 'sábado': 'Sabado'
+      };
+
+      const dia = diaMap[msgLower];
+      if (!dia) return `Por favor, escolha:\n1️⃣ Segunda\n2️⃣ Terca\n3️⃣ Quarta\n4️⃣ Quinta\n5️⃣ Sexta\n6️⃣ Sabado`;
+
+      const { nome, modalidade, horario } = { ...estado.dados, dia };
       limparEstado(de);
 
       // Salva lead no CRM
       await Clientes.salvarCliente({
-        nome: profileName || 'Desconhecido',
+        nome: nome || profileName || 'Desconhecido',
         whatsapp: de,
         status: 'Lead',
-        observacoes: `Interesse: ${msgTrim}`
+        observacoes: `${modalidade} - ${dia} - ${horario}`
       }).catch(() => {});
 
-      // Notifica o studio sobre a solicitação
-      const numeroStudio = process.env.DONO_WHATSAPP;
+      // Notifica o studio
       const numeroAluno = de.replace('whatsapp:', '');
-      const nomeAluno = estado.dados?.nome || profileName || 'Desconhecido';
       const msgStudio =
         `🔔 *Nova solicitacao de agendamento!*\n\n` +
-        `👤 Aluno: *${nomeAluno}*\n` +
+        `👤 Aluno: *${nome}*\n` +
         `📱 WhatsApp: *${numeroAluno}*\n` +
-        `📝 Preferencia: *${msgTrim}*\n\n` +
+        `🏋️ Modalidade: *${modalidade}*\n` +
+        `📅 Dia: *${dia}*\n` +
+        `⏰ Horario: *${horario}*\n\n` +
         `Verifique a disponibilidade e confirme com o aluno.`;
 
-      await enviarMensagem(numeroStudio, msgStudio).catch(e =>
+      await enviarMensagem(process.env.DONO_WHATSAPP, msgStudio).catch(e =>
         logger.warn(`Falha ao notificar studio: ${e.message}`)
       );
 
-      await Logs.registrar('CLIENTES', 'INFO', `Solicitacao agendamento: ${profileName} (${de}) - ${msgTrim}`);
+      await Logs.registrar('CLIENTES', 'INFO', `Agendamento: ${nome} - ${modalidade} ${dia} ${horario}`);
       return MSG.encaminharAtendente();
     }
   }
