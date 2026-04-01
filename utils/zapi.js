@@ -6,10 +6,11 @@ const logger = require('./logger');
 const BASE_URL = () =>
   `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE_ID}/token/${process.env.ZAPI_TOKEN}`;
 
-const HEADERS = () => ({
-  'Content-Type': 'application/json',
-  'Client-Token': process.env.ZAPI_CLIENT_TOKEN
-});
+const HEADERS = () => {
+  const h = { 'Content-Type': 'application/json' };
+  if (process.env.ZAPI_CLIENT_TOKEN) h['Client-Token'] = process.env.ZAPI_CLIENT_TOKEN;
+  return h;
+};
 
 /**
  * Normaliza número para formato Z-API (551199999999)
