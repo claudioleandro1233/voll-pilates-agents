@@ -2,7 +2,7 @@
 require('dotenv').config();
 const express = require('express');
 const cron = require('node-cron');
-const { enviarMensagem, extrairDadosWebhook } = require('../utils/twilio');
+const { enviarMensagem, extrairDadosWebhook } = require('../utils/zapi');
 const { Clientes, Logs } = require('../utils/sheets');
 const { listarEventosDia } = require('../utils/calendar');
 const { obterEstado, definirEstado, limparEstado, atualizarDados } = require('../utils/state');
@@ -320,9 +320,9 @@ async function processarMensagem(de, mensagem, profileName) {
 // ─── Webhook ─────────────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
   try {
-    const { de, mensagem, profileName } = extrairDadosWebhook(req.body);
+    const { de, mensagem, profileName, isGroup, fromMe } = extrairDadosWebhook(req.body);
 
-    if (!de || !mensagem) return res.status(400).json({ erro: 'Dados invalidos' });
+    if (!de || !mensagem || fromMe || isGroup) return res.status(200).send('OK');
 
     logger.info(`[CLIENTES] Mensagem de ${de}: "${mensagem}"`);
 

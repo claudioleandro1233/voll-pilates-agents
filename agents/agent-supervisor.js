@@ -4,7 +4,7 @@
 require('dotenv').config();
 const express = require('express');
 const cron = require('node-cron');
-const { enviarMensagem, extrairDadosWebhook } = require('../utils/twilio');
+const { enviarMensagem, extrairDadosWebhook } = require('../utils/zapi');
 const { Clientes, Financeiro, Operacional, Logs, lerLinhas } = require('../utils/sheets');
 const { listarEventosDia } = require('../utils/calendar');
 const logger = require('../utils/logger');
@@ -237,9 +237,9 @@ async function processarMensagem(de, mensagem) {
 // ─── Webhook ─────────────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
   try {
-    const { de, mensagem } = extrairDadosWebhook(req.body);
+    const { de, mensagem, isGroup, fromMe } = extrairDadosWebhook(req.body);
 
-    if (!de || !mensagem) return res.status(400).json({ erro: 'Dados inválidos' });
+    if (!de || !mensagem || fromMe || isGroup) return res.status(200).send('OK');
 
     logger.info(`[SUPERVISOR] Mensagem de ${de}: "${mensagem}"`);
 
