@@ -116,16 +116,16 @@ const PRECOS = {
 const MSG = {
 
   menu: () =>
-    `Ola, studio Voll Autodromo! 👋\n\n` +
+    `Ola! 👋\n\n` +
     `Sou a assistente da *Voll Pilates Studio* 🧘‍♀️\n\n` +
     `O que posso fazer por voce?\n\n` +
-    `1️⃣ Agendar uma aula\n` +
-    `2️⃣ Ver meus agendamentos\n` +
-    `3️⃣ Planos e valores\n` +
-    `4️⃣ TotalPass / Welhub\n` +
-    `5️⃣ Endereco e horarios\n` +
-    `6️⃣ Falar com atendente\n\n` +
-    `Digite o numero da opcao ou sua duvida.`,
+    `• Agendar uma aula\n` +
+    `• Ver meus agendamentos\n` +
+    `• Planos e valores\n` +
+    `• TotalPass / Welhub\n` +
+    `• Endereco e horarios\n` +
+    `• Falar com atendente\n\n` +
+    `Escreva o item que deseja e eu te ajudo! 😊`,
 
   opcaoInvalida: () =>
     `Opcao invalida. Digite 1-6 para o menu.\n\n` +
