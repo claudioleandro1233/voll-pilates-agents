@@ -424,6 +424,15 @@ async function processarMensagem(de, mensagem, profileName) {
 
   // ── Comandos do dono ──────────────────────────────────────────────────────
   if (remetenteNumero === donoNumero && msgTrim.startsWith('/')) {
+    logger.info(`[DONO CMD] msg="${msgTrim}" rem=${remetenteNumero} dono=${donoNumero}`);
+
+    // /testePosAula — teste rapido do fluxo pos-aula
+    if (/^\/testeposaula$/i.test(msgTrim)) {
+      definirEstado(de, { agente: 'clientes', etapa: 'aguardando_feedback_pos_aula', dados: {} });
+      await enviarMensagem(de, MSG.posAulaFeedback());
+      return `🧪 Teste enviado! Responda *1* ou *2* para testar o fluxo.`;
+    }
+
     const resposta = await processarComandoDono(msgTrim, de);
     return resposta || `Comando nao reconhecido. Digite */ajuda* para ver os comandos.`;
   }
