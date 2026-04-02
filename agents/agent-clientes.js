@@ -410,8 +410,8 @@ async function processarMensagem(de, mensagem, profileName) {
   ultimaAtividade.set(de, Date.now());
   avisoInatividade.delete(de);
 
-  // ── Dono: respostas rápidas 1/2/3 ────────────────────────────────────────
-  if (remetenteNumero === donoNumero && ['1', '2', '3'].includes(msgTrim)) {
+  // ── Dono: respostas rápidas 1/2/3 (só se não tiver fluxo ativo próprio) ──
+  if (remetenteNumero === donoNumero && ['1', '2', '3'].includes(msgTrim) && !estado) {
     if (!ultimoPendente) return `Nenhum agendamento pendente no momento.`;
     const actionMap = {
       '1': `confirmar_${ultimoPendente}`,
@@ -427,7 +427,7 @@ async function processarMensagem(de, mensagem, profileName) {
     if (/^\/testeposaula$/i.test(msgTrim)) {
       definirEstado(de, { agente: 'clientes', etapa: 'aguardando_feedback_pos_aula', dados: {} });
       await enviarMensagem(de, MSG.posAulaFeedback());
-      return `🧪 Teste enviado! Responda *1* ou *2* para testar o fluxo.`;
+      return null;
     }
 
     const resposta = await processarComandoDono(msgTrim, de);
