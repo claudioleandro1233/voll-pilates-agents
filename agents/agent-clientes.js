@@ -423,9 +423,11 @@ async function processarComandoDono(mensagem, de) {
 // ─── Roteador principal ───────────────────────────────────────────────────────
 async function processarMensagem(de, mensagem, profileName) {
   const msgTrim = mensagem.trim();
-  let msgLower = msgTrim.toLowerCase().trim();
-  msgLower = msgLower
+  // Strip agressivo: keycaps (U+FE0F U+20E3), todos emojis, simbolos
+  let msgLower = msgTrim.toLowerCase()
+    .replace(/\uFE0F\u20E3/g, '')          // keycap suffix (1️⃣ etc)
     .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE0F}\u{20E3}]/gu, '')
+    .replace(/[^\w\s]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   const estado = obterEstado(de);
@@ -632,7 +634,7 @@ async function processarMensagem(de, mensagem, profileName) {
   }
 
   // ── Opcoes do menu ────────────────────────────────────────────────────────
-  if (/^1(\s|$)|agendar|marcar|quero aula|reserva|agende/i.test(msgLower)) {
+  if (/^1(\s|$)|agendar|marcar|quero aula|reserva|agende/i.test(msgLower) || msgLower === '1') {
     await capturarLead(de, profileName);
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_agendar', dados: {} });
     return MSG.pedirNomeAgendar();
