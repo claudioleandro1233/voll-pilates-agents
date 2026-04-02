@@ -423,7 +423,9 @@ async function processarComandoDono(mensagem, de) {
 // ─── Roteador principal ───────────────────────────────────────────────────────
 async function processarMensagem(de, mensagem, profileName) {
   const msgTrim = mensagem.trim();
-  const msgLower = msgTrim.toLowerCase();
+  // Remove emojis e espaços extras para comparação limpa
+  const msgClean = msgTrim.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
+  const msgLower = msgClean.toLowerCase();
   const estado = obterEstado(de);
   const donoNumero = normalizarNumero(DONO());
   const remetenteNumero = normalizarNumero(de);
@@ -629,31 +631,31 @@ async function processarMensagem(de, mensagem, profileName) {
   }
 
   // ── Opcoes do menu ────────────────────────────────────────────────────────
-  if (msgLower === '1' || /agendar|marcar|quero aula/i.test(msgLower)) {
+  if (/^1\b/.test(msgLower) || /agendar|marcar|quero aula/i.test(msgLower)) {
     await capturarLead(de, profileName);
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_agendar', dados: {} });
     return MSG.pedirNomeAgendar();
   }
 
-  if (msgLower === '2' || /meus agendamentos|ver aula|minhas aulas/i.test(msgLower)) {
+  if (/^2\b/.test(msgLower) || /meus agendamentos|ver aula|minhas aulas/i.test(msgLower)) {
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_agendamento', dados: {} });
     return MSG.pedirNomeOuTelefone();
   }
 
-  if (msgLower === '3' || /plano|valor|preco|mensalidade|quanto custa/i.test(msgLower)) {
+  if (/^3\b/.test(msgLower) || /plano|valor|preco|mensalidade|quanto custa/i.test(msgLower)) {
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_planos', dados: {} });
     return MSG.pedirNomePlanos();
   }
 
-  if (msgLower === '4' || /totalpass|welhub|gympass/i.test(msgLower)) {
+  if (/^4\b/.test(msgLower) || /totalpass|welhub|gympass/i.test(msgLower)) {
     return MSG.totalpass();
   }
 
-  if (msgLower === '5' || /endereco|onde fica|localizacao|como chegar/i.test(msgLower)) {
+  if (/^5\b/.test(msgLower) || /endereco|onde fica|localizacao|como chegar/i.test(msgLower)) {
     return MSG.endereco();
   }
 
-  if (msgLower === '6' || /falar com alguem|operador/i.test(msgLower)) {
+  if (/^6\b/.test(msgLower) || /falar com alguem|operador/i.test(msgLower)) {
     if (!dentroDoPeriodoAtendimento()) return MSG.foraDoHorario();
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_atendente', dados: {} });
     return `Para te conectar com um atendente, me diz seu *nome*:`;
