@@ -464,10 +464,11 @@ async function processarMensagem(de, mensagem, profileName) {
   // Se o aluno digitar uma opção do menu (1-6) enquanto espera texto (nome/telefone),
   // reseta o estado e trata como nova seleção de menu
   // Se aluno digitar 1-6, sempre limpa o estado e cai no menu
-  if (/^[1-6]$/.test(msgTrim) && estado?.agente === 'clientes') {
-    limparEstado(de);
-    // não entra nos fluxos ativos abaixo
-  } else if (estado?.agente === 'clientes') {
+  // Permite o usuário voltar ao menu explicitamente
+if (/^(menu|inicio|start)$/i.test(msgLower)) {
+  limparEstado(de);
+  return MSG.menu();
+}
 
     // Ver agendamentos
     if (estado.etapa === 'aguardando_nome_agendamento') {
@@ -633,7 +634,7 @@ async function processarMensagem(de, mensagem, profileName) {
   }
 
   // ── Opcoes do menu ────────────────────────────────────────────────────────
-  if (/1|agendar|marcar|quero aula|reserva|aula|agende/i.test(msgLower)) {
+  if (/^1(\s|$)|agendar|marcar|quero aula|reserva|agende/i.test(msgLower)) {
     await capturarLead(de, profileName);
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_agendar', dados: {} });
     return MSG.pedirNomeAgendar();
