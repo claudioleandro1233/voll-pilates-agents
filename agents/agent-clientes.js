@@ -4,14 +4,81 @@ const express = require('express');
 const cron = require('node-cron');
 const { enviarMensagem, extrairDadosWebhook, normalizarNumero } = require('../utils/zapi');
 const { Clientes, Logs } = require('../utils/sheets');
+const DIAS_SEMANA = ['Domingo', 'Segunda', 'Terca', 'Quarta', 'Quinta', 'Sexta', 'Sabado'];
 const { listarEventosDia } = require('../utils/calendar');
 const { obterEstado, definirEstado, limparEstado, atualizarDados } = require('../utils/state');
 const logger = require('../utils/logger');
 
 const router = express.Router();
 
-const FORM_NPS_URL = process.env.FORM_NPS_URL || process.env.STUDIO_BOOKING_LINK || '#';
 const DONO = () => process.env.DONO_WHATSAPP;
+
+// Armazena agendamentos pendentes aguardando resposta do dono
+// chave: numero do aluno (sem prefixo), valor: { nome, modalidade, dia, horario }
+const pendentesAgendamento = new Map();
+
+// Último número pendente — usado para mapear respostas 1/2/3 do dono
+let ultimoPendente = null;
+
+// ─── Controle de inatividade ─────────────────────────────────────────────────
+const ultimaAtividade = new Map();  // de -> timestamp última mensagem
+const avisoInatividade = new Set(); // de (já recebeu aviso de inatividade)
+
+const TIMEOUT_AVISO_MS  = 2 * 60 * 1000; // 2 min → envia aviso
+const TIMEOUT_FECHAR_MS = 8 * 60 * 1000; // 8 min → encerra conversa
+
+setInterval(async () => {
+  const agora = Date.now();
+  for (const [de, ultimaVez] of ultimaAtividade.entries()) {
+    const inativo = agora - ultimaVez;
+    const estado = obterEstado(de);
+    if (!estado) {
+      ultimaAtividade.delete(de);
+      avisoInatividade.delete(de);
+      continue;
+    }
+    if (inativo >= TIMEOUT_FECHAR_MS) {
+      limparEstado(de);
+      ultimaAtividade.delete(de);
+      avisoInatividade.delete(de);
+      await enviarMensagem(de,
+        `⌛ Conversa encerrada por inatividade.\n\nQuando quiser, é só mandar *oi* para recomeçar! 😊`
+      ).catch(() => {});
+    } else if (inativo >= TIMEOUT_AVISO_MS && !avisoInatividade.has(de)) {
+      avisoInatividade.add(de);
+      await enviarMensagem(de,
+        `⏳ Ainda está por aí? Vou encerrar sua conversa em alguns minutos por inatividade.\n\nBasta responder qualquer coisa para continuar. 😊`
+      ).catch(() => {});
+    }
+  }
+}, 2 * 60 * 1000);
+
+// ─── Helpers de horário ──────────────────────────────────────────────────────
+
+/**
+ * Retorna true se estiver dentro do horário de funcionamento do studio.
+ * Seg-Sex: 07h-13h | 15h-21h   Sab: 08h-12h   Dom: fechado
+ */
+function dentroDoPeriodoAtendimento() {
+  const agora = new Date();
+  const dia = agora.getDay(); // 0=Dom, 6=Sab
+  const h = agora.getHours() + agora.getMinutes() / 60;
+  if (dia === 0) return false;
+  if (dia === 6) return h >= 8 && h < 12;
+  return (h >= 7 && h < 13) || (h >= 15 && h < 21);
+}
+
+/**
+ * Retorna o nome do atendente responsável no horário atual, ou null se nenhum definido.
+ * Até 12h → Messias   15h-19:30h → Marina
+ */
+function obterAtendente() {
+  const agora = new Date();
+  const h = agora.getHours() + agora.getMinutes() / 60;
+  if (h >= 7 && h < 12) return 'Messias';
+  if (h >= 15 && h < 19.5) return 'Marina';
+  return null;
+}
 
 // ─── Tabela de preços ────────────────────────────────────────────────────────
 const PRECOS = {
@@ -94,8 +161,20 @@ const MSG = {
   },
 
   // ── Atendente ──
-  aguardandoAtendente: (nome) =>
-    `Ola, *${nome}*! 👋 Um atendente vai entrar em contato em breve.\n\nSe preferir, pode ligar ou mandar mensagem diretamente:\n📱 ${process.env.STUDIO_PHONE || ''}`,
+  aguardandoAtendente: (nome, atendente) =>
+    `Ola, *${nome}*! 👋 ` +
+    (atendente
+      ? `O atendente *${atendente}* vai entrar em contato em breve.`
+      : `Um atendente vai entrar em contato em breve.`) +
+    `\n\nSe preferir, pode ligar ou mandar mensagem diretamente:\n📱 ${process.env.STUDIO_PHONE || ''}`,
+
+  foraDoHorario: () =>
+    `😔 Que pena! No momento os atendentes não estão disponíveis.\n\n` +
+    `🕒 *Horários de atendimento:*\n` +
+    `Seg-Sex: 07h às 13h | 15h às 21h\n` +
+    `Sábado: 08h às 12h\n` +
+    `Domingo: Fechado\n\n` +
+    `Volte nesse horário e teremos um atendente pronto para te ajudar! 💙`,
 
   // ── Ver agendamentos ──
   pedirNomeOuTelefone: () => `Para ver seus agendamentos, informe seu *nome ou telefone*:`,
@@ -124,6 +203,24 @@ const MSG = {
   nps: (nome) =>
     `🌟 Ola, *${nome}*! Como foi sua aula hoje?\nResponda de 0 a 10:\n*(0 = pessimo, 10 = excelente)*`,
 
+  // ── Pós-aula ──
+  posAulaFeedback: () =>
+    `🧘‍♀️ *Que bom ter voce com a gente hoje!*\n\n` +
+    `Gostou da aula? Responda:\n\n` +
+    `*1* — 😍 Sim, adorei!\n` +
+    `*2* — 😐 Tenho sugestoes`,
+
+  posAulaSim: () =>
+    `🎉 Que otimo! Ficamos muito alegres com essa noticia! 💙\n\n` +
+    `Ficariamos muito gratos se voce avaliar nosso studio no Google Maps! 🙏\n\n` +
+    `https://www.google.com/search?sca_esv=b78cf8500232fcdc&sxsrf=ANbL-n4b1RN85qdBNe6wyrHPb-cGHOG2OQ:1775075599658&si=AL3DRZEsmMGCryMMFSHJ3StBhOdZ2-6yYkXd_doETEE1OR-qOY23akEhMvB9Sq_mbvgiULF_OoQf4OD1bsxDADd9bpNbExiPVmkvwIjA0ccuW4DEVzI4fVAc204iOuIRElj6QXOllPlGgupPr6Y43Y9D-_ndCXbSJdE8p5_VFdNf1oxs8Q2nb_8%3D&q=Voll+Pilates+Studios+-+Aut%C3%B3dromo+Coment%C3%A1rios&sa=X&ved=2ahUKEwjeo8T0v82TAxUJrJUCHe83IYEQ0bkNegQIJxAF&biw=1680&bih=841&dpr=2`,
+
+  posAulaNao: () =>
+    `Obrigada pelo feedback! 🙏\n\nTem algo que gostaria de sugerir ou melhorar? Conta pra gente:`,
+
+  posAulaMelhoriaRecebida: () =>
+    `💙 Obrigada pela sua opiniao! Vamos sempre buscar melhorar para voces.\n\nAte a proxima aula! 🧘‍♀️`,
+
   erroGeral: () => `Desculpe, ocorreu um erro. Por favor, tente novamente.`
 };
 
@@ -140,7 +237,10 @@ async function capturarLead(de, profileName) {
 }
 
 async function notificarStudioAgendamento(nome, numero, modalidade, dia, horario) {
-  const msg =
+  pendentesAgendamento.set(numero, { nome, modalidade, dia, horario });
+  ultimoPendente = numero;
+
+  const texto =
     `🔔 *Nova solicitacao de agendamento!*\n\n` +
     `👤 Aluno: *${nome}*\n` +
     `📱 WhatsApp: *${numero}*\n` +
@@ -148,27 +248,26 @@ async function notificarStudioAgendamento(nome, numero, modalidade, dia, horario
     `📅 Dia: *${dia}*\n` +
     `⏰ Horario: *${horario}*\n\n` +
     `━━━━━━━━━━━━━━\n` +
-    `*Responda com um dos comandos:*\n\n` +
-    `✅ Confirmar vaga:\n` +
-    `/confirmar ${numero} ${modalidade} ${dia} ${horario}\n\n` +
-    `❌ Sem vaga (sugerir outro horario):\n` +
-    `/semvaga ${numero}\n\n` +
-    `💬 Mensagem livre:\n` +
-    `/msg ${numero} [seu texto aqui]`;
+    `Responda com:\n` +
+    `*1* — ✅ Confirmar vaga\n` +
+    `*2* — ❌ Sem vaga\n` +
+    `*3* — 💬 Mensagem livre`;
 
-  await enviarMensagem(DONO(), msg).catch(e =>
+  await enviarMensagem(DONO(), texto).catch(e =>
     logger.warn(`Falha notificar studio: ${e.message}`)
   );
 }
 
-async function notificarStudioAtendente(nome, numero) {
+async function notificarStudioAtendente(nome, numero, atendente) {
+  const quem = atendente ? `*${atendente}*, você tem` : `Tem`;
   const msg =
     `🙋 *Aluno quer falar com atendente!*\n\n` +
     `👤 Nome: *${nome}*\n` +
-    `📱 WhatsApp: *${numero}*\n\n` +
-    `━━━━━━━━━━━━━━\n` +
-    `*Responda com:*\n\n` +
-    `💬 Mensagem livre:\n` +
+    `📱 WhatsApp: *${numero}*\n` +
+    (atendente ? `👩‍💼 Atendente: *${atendente}*\n` : '') +
+    `\n━━━━━━━━━━━━━━\n` +
+    `${quem} um novo contato aguardando.\n\n` +
+    `💬 Para responder:\n` +
     `/msg ${numero} [seu texto aqui]`;
 
   await enviarMensagem(DONO(), msg).catch(e =>
@@ -176,8 +275,50 @@ async function notificarStudioAtendente(nome, numero) {
   );
 }
 
+// ─── Clique de botão do dono ─────────────────────────────────────────────────
+async function processarBotaoDono(buttonId) {
+  // confirmar_<numero>
+  if (buttonId.startsWith('confirmar_')) {
+    const numero = buttonId.replace('confirmar_', '');
+    const dados = pendentesAgendamento.get(numero);
+    if (!dados) return `⚠️ Agendamento nao encontrado. Use /confirmar ${numero} [modalidade] [dia] [horario]`;
+
+    let nomeAluno = dados.nome;
+    try {
+      const cliente = await Clientes.buscarPorWhatsApp(`whatsapp:+${numero}`);
+      if (cliente?.dados?.[1]) nomeAluno = cliente.dados[1];
+    } catch (e) {}
+
+    await enviarMensagem(`whatsapp:+${numero}`, MSG.agendamentoConfirmado({ nome: nomeAluno, ...dados }));
+    pendentesAgendamento.delete(numero);
+    return `✅ Confirmacao enviada para ${nomeAluno} (+${numero})`;
+  }
+
+  // semvaga_<numero>
+  if (buttonId.startsWith('semvaga_')) {
+    const numero = buttonId.replace('semvaga_', '');
+    await enviarMensagem(`whatsapp:+${numero}`,
+      `😔 Infelizmente o horario solicitado nao tem vaga no momento.\n\n` +
+      `Mas temos outros horarios disponiveis! Gostaria de escolher outra opcao?\n\n` +
+      `*PILATES*\nManha: 07h, 08h, 09h, 10h\nTarde: 15h, 16h, 17h, 18h, 19h, 20h\n\n` +
+      `*FUNCIONAL*\nManha: 07h, 08h, 09h, 10h, 11h, 12h\nTarde: 15h, 16h, 17h\n\n` +
+      `Responda com o horario e dia que prefere ou digite *1* para reiniciar.`
+    );
+    pendentesAgendamento.delete(numero);
+    return `✅ Mensagem de sem vaga enviada para +${numero}`;
+  }
+
+  // msg_<numero> — pede para digitar a mensagem livre
+  if (buttonId.startsWith('msg_')) {
+    const numero = buttonId.replace('msg_', '');
+    return `✏️ Digite a mensagem para enviar ao aluno (+${numero}):\n/msg ${numero} [sua mensagem aqui]`;
+  }
+
+  return null;
+}
+
 // ─── Comandos do dono ────────────────────────────────────────────────────────
-async function processarComandoDono(mensagem) {
+async function processarComandoDono(mensagem, de) {
   const msgTrim = mensagem.trim();
 
   // /confirmar <numero> <modalidade> <dia> <horario>
@@ -220,6 +361,24 @@ async function processarComandoDono(mensagem) {
     return `✅ Mensagem enviada para +${numero}`;
   }
 
+  // /posAula <numero>
+  const posAulaMatch = msgTrim.match(/^\/posaula\s+(\d+)/i);
+  if (posAulaMatch) {
+    const [, numero] = posAulaMatch;
+    const para = `whatsapp:+${normalizarNumero(numero)}`;
+    definirEstado(para, { agente: 'clientes', etapa: 'aguardando_feedback_pos_aula', dados: { numero } });
+    await enviarMensagem(para, MSG.posAulaFeedback());
+    return `✅ Mensagem pos-aula enviada para +${numero}`;
+  }
+
+  // /testePosAula — envia a mensagem pós-aula para o proprio numero do dono
+  if (/^\/testeposaula$/i.test(msgTrim)) {
+    const para = de; // manda para si mesmo
+    definirEstado(para, { agente: 'clientes', etapa: 'aguardando_feedback_pos_aula', dados: {} });
+    await enviarMensagem(para, MSG.posAulaFeedback());
+    return `🧪 Teste enviado! Responda *1* ou *2* para testar o fluxo completo.`;
+  }
+
   // /ajuda
   if (/^\/ajuda$/i.test(msgTrim)) {
     return (
@@ -230,6 +389,8 @@ async function processarComandoDono(mensagem) {
       `_Ex: /semvaga 5511999998888_\n\n` +
       `💬 */msg* [numero] [texto livre]\n` +
       `_Ex: /msg 5511999998888 Ola, tudo bem?_\n\n` +
+      `🧘 */posAula* [numero]\n` +
+      `_Ex: /posAula 5511999998888_\n\n` +
       `❓ */ajuda* — lista os comandos`
     );
   }
@@ -245,9 +406,25 @@ async function processarMensagem(de, mensagem, profileName) {
   const donoNumero = normalizarNumero(DONO());
   const remetenteNumero = normalizarNumero(de);
 
+  // ── Registra atividade e reseta aviso de inatividade ─────────────────────
+  ultimaAtividade.set(de, Date.now());
+  avisoInatividade.delete(de);
+
+  // ── Dono: respostas rápidas 1/2/3 ────────────────────────────────────────
+  if (remetenteNumero === donoNumero && ['1', '2', '3'].includes(msgTrim)) {
+    if (!ultimoPendente) return `Nenhum agendamento pendente no momento.`;
+    const actionMap = {
+      '1': `confirmar_${ultimoPendente}`,
+      '2': `semvaga_${ultimoPendente}`,
+      '3': `msg_${ultimoPendente}`
+    };
+    const resposta = await processarBotaoDono(actionMap[msgTrim]);
+    return resposta || `Acao processada.`;
+  }
+
   // ── Comandos do dono ──────────────────────────────────────────────────────
   if (remetenteNumero === donoNumero && msgTrim.startsWith('/')) {
-    const resposta = await processarComandoDono(msgTrim);
+    const resposta = await processarComandoDono(msgTrim, de);
     return resposta || `Comando nao reconhecido. Digite */ajuda* para ver os comandos.`;
   }
 
@@ -256,17 +433,22 @@ async function processarMensagem(de, mensagem, profileName) {
 
     // Ver agendamentos
     if (estado.etapa === 'aguardando_nome_agendamento') {
-      const busca = msgTrim;
       try {
         const resultado = await Clientes.buscarPorWhatsApp(de);
-        const nome = resultado?.dados?.[1] || busca;
-        const eventos = await require('../utils/calendar').eventosCliente(busca);
         limparEstado(de);
-        if (!eventos || eventos.length === 0) return MSG.agendamentosNaoEncontrados();
-        const lista = eventos.map(ev => {
-          const inicio = new Date(ev.start?.dateTime || ev.start?.date);
-          return `✅ ${inicio.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit' })} ${inicio.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
-        }).join('\n');
+
+        const nome = resultado?.dados?.[1] || msgTrim;
+        const obs = resultado?.dados?.[6]; // "Pilates - Quarta - 10h"
+
+        if (!obs) return MSG.agendamentosNaoEncontrados();
+
+        const lista = `✅ ${obs}`;
+        // Envia mensagem extra de boas-vindas após a lista
+        enviarMensagem(de,
+          `💧 Nao esqueca de trazer sua *agua* e usar *roupas confortaveis*, te esperamos aqui! 🧘‍♀️\n\n` +
+          `Sabe chegar no nosso studio?\n` +
+          `📍 https://maps.app.goo.gl/cHDecPZZRcNksCyE7`
+        ).catch(() => {});
         return MSG.agendamentosEncontrados(nome, lista);
       } catch (e) {
         limparEstado(de);
@@ -351,20 +533,57 @@ async function processarMensagem(de, mensagem, profileName) {
       return MSG.mostrarPlano(nome, modalidade, freq);
     }
 
+    // ── Fluxo Pós-aula ──
+    if (estado.etapa === 'aguardando_feedback_pos_aula') {
+      if (msgLower === '1' || /sim|adorei|gostei|amei|otimo|ótimo/i.test(msgLower)) {
+        limparEstado(de);
+        const atendente = obterAtendente();
+        // Notifica atendente para follow-up de venda
+        const nomeAluno = profileName || normalizarNumero(de);
+        await enviarMensagem(DONO(),
+          `🌟 *Aluno satisfeito — oportunidade de venda!*\n\n` +
+          `👤 ${nomeAluno}\n` +
+          `📱 +${normalizarNumero(de)}\n` +
+          (atendente ? `👩‍💼 Atendente: *${atendente}*\n` : '') +
+          `\nGostou da aula e pode virar aluno! Entre em contato. 💙`
+        ).catch(() => {});
+        return MSG.posAulaSim();
+      }
+      if (msgLower === '2' || /nao|não|sugestao|melhora/i.test(msgLower)) {
+        definirEstado(de, { agente: 'clientes', etapa: 'aguardando_melhoria_pos_aula', dados: estado.dados });
+        return MSG.posAulaNao();
+      }
+      return `Responda *1* — Sim ou *2* — Tenho sugestoes.`;
+    }
+
+    if (estado.etapa === 'aguardando_melhoria_pos_aula') {
+      const melhoria = msgTrim;
+      limparEstado(de);
+      await Logs.registrar('CLIENTES', 'FEEDBACK', `Sugestao de melhoria: ${melhoria} (${de})`).catch(() => {});
+      await enviarMensagem(DONO(),
+        `💬 *Sugestao de melhoria recebida!*\n\n` +
+        `📱 +${normalizarNumero(de)}\n\n` +
+        `"${melhoria}"`
+      ).catch(() => {});
+      return MSG.posAulaMelhoriaRecebida();
+    }
+
     // ── Fluxo Atendente ──
     if (estado.etapa === 'aguardando_nome_atendente') {
       const nome = msgTrim.length >= 3 ? msgTrim : profileName;
+      const atendente = obterAtendente();
       limparEstado(de);
 
-      await notificarStudioAtendente(nome, normalizarNumero(de));
+      await notificarStudioAtendente(nome, normalizarNumero(de), atendente);
 
       await Logs.registrar('CLIENTES', 'INFO', `Atendente solicitado: ${nome} (${de})`);
-      return MSG.aguardandoAtendente(nome);
+      return MSG.aguardandoAtendente(nome, atendente);
     }
   }
 
   // ── Opção 9 — atendente (dentro de outros fluxos) ────────────────────────
   if (msgLower === '9' || /atendente|humano|falar com/i.test(msgLower)) {
+    if (!dentroDoPeriodoAtendimento()) return MSG.foraDoHorario();
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_atendente', dados: {} });
     return `Para te conectar com um atendente, me diz seu *nome*:`;
   }
@@ -395,6 +614,7 @@ async function processarMensagem(de, mensagem, profileName) {
   }
 
   if (msgLower === '6' || /atendente|falar com alguem|humano/i.test(msgLower)) {
+    if (!dentroDoPeriodoAtendimento()) return MSG.foraDoHorario();
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_atendente', dados: {} });
     return `Para te conectar com um atendente, me diz seu *nome*:`;
   }
@@ -437,6 +657,35 @@ router.post('/', async (req, res) => {
 });
 
 // ─── Crons ───────────────────────────────────────────────────────────────────
+// ─── Cron: mensagem pós-aula automática ──────────────────────────────────────
+// Roda 5 min depois de cada hora em dias de aula (Seg-Sab)
+// Verifica quais alunos tinham aula no dia/horário que acabou de terminar
+cron.schedule('5 * * * 1-6', async () => {
+  try {
+    const agora = new Date();
+    const horaTerminou = agora.getHours() - 1; // aula de 1h que terminou agora
+    if (horaTerminou < 0) return; // meia-noite, ignora
+    const horarioAula = `${horaTerminou}h`;
+    const diaHoje = DIAS_SEMANA[agora.getDay()];
+
+    const alunos = await Clientes.listarComAgendamento();
+    for (const aluno of alunos) {
+      const obs = (aluno[6] || '').toLowerCase();
+      if (!obs.includes(diaHoje.toLowerCase()) || !obs.includes(horarioAula)) continue;
+
+      const whatsapp = aluno[2]; // col WhatsApp
+      if (!whatsapp) continue;
+
+      definirEstado(whatsapp, { agente: 'clientes', etapa: 'aguardando_feedback_pos_aula', dados: {} });
+      await enviarMensagem(whatsapp, MSG.posAulaFeedback()).catch(e =>
+        logger.warn(`[CRON POS-AULA] Falha ao enviar para ${whatsapp}: ${e.message}`)
+      );
+      await new Promise(r => setTimeout(r, 1500)); // pausa entre envios
+    }
+    logger.info(`[CRON POS-AULA] ${diaHoje} ${horarioAula} — ${alunos.length} verificados`);
+  } catch (e) { logger.error(`[CRON POS-AULA] ${e.message}`); }
+}, { timezone: 'America/Sao_Paulo' });
+
 cron.schedule('0 8 * * 1-6', async () => {
   try {
     const amanha = new Date();

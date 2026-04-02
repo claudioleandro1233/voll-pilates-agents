@@ -63,4 +63,47 @@ function extrairDadosWebhook(body) {
   return { de, mensagem: mensagem.trim(), profileName, isGroup, fromMe };
 }
 
-module.exports = { enviarMensagem, extrairDadosWebhook, normalizarNumero };
+/**
+ * Envia mensagem com botões interativos (máx 3 botões, label até 25 chars)
+ * @param {string} para - Número destino
+ * @param {string} mensagem - Texto da mensagem
+ * @param {Array} botoes - [{ id, label }]
+ */
+async function enviarMensagemComBotoes(para, mensagem, botoes) {
+  try {
+    const phone = normalizarNumero(para);
+
+    const resp = await axios.post(
+      `${BASE_URL()}/send-button-list`,
+      {
+        phone,
+        message: mensagem,
+        buttonList: { buttons: botoes }
+      },
+      { headers: HEADERS() }
+    );
+
+    logger.info(`✅ Z-API botoes enviado para ${phone} | zaapId: ${resp.data?.zaapId}`);
+    return resp.data;
+  } catch (erro) {
+    // Fallback: envia como texto simples se botões falharem
+    logger.warn(`⚠️ Botoes nao suportados, enviando como texto: ${erro.message}`);
+    const textoBotoes = botoes.map(b => `• ${b.label}`).join('\n');
+    return enviarMensagem(para, `${mensagem}\n\n${textoBotoes}`);
+  }
+}
+
+/**
+ * Extrai dados de clique em botão do webhook Z-API
+ */
+function extrairBotaoClicado(body) {
+  // Verifica se é resposta de botão
+  if (body.mediaType === 'conversation_button' || body.type === 'conversation_button') {
+    const botaoSelecionado = (body.buttons || []).find(b => b.selected);
+    return botaoSelecionado?.id || null;
+  }
+  // Fallback: tenta pegar pelo campo buttonId
+  return body.buttonId || body.selectedButtonId || null;
+}
+
+module.exports = { enviarMensagem, enviarMensagemComBotoes, extrairBotaoClicado, extrairDadosWebhook, normalizarNumero };

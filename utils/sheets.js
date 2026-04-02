@@ -151,6 +151,12 @@ const Clientes = {
     return linhas.slice(1).filter(l => l[4] === 'Ativo'); // Pula cabeçalho
   },
 
+  // Retorna todos os alunos com WhatsApp e observacoes preenchidos (Ativo ou Lead)
+  async listarComAgendamento() {
+    const linhas = await lerLinhas('clientes', 'Clientes');
+    return linhas.slice(1).filter(l => l[2] && l[6]); // whatsapp + observacoes
+  },
+
   /**
    * Salva resposta NPS
    * Col: Data | WhatsApp | Nome | Nota | Comentário
