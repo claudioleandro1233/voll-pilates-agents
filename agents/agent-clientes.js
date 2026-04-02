@@ -461,13 +461,12 @@ async function processarMensagem(de, mensagem, profileName) {
   }
 
   // ── Fluxos ativos ────────────────────────────────────────────────────────
-  // Só limpa estado se estiver numa etapa que espera TEXTO (nome) e o aluno digitar 1-6
-  const etapasEsperamTexto = ['aguardando_nome_agendamento', 'aguardando_nome_agendar', 'aguardando_nome_planos', 'aguardando_nome_atendente'];
-  if (estado?.agente === 'clientes' && etapasEsperamTexto.includes(estado.etapa) && /^[1-6](\s|$)/.test(msgLower)) {
+  // Etapas que esperam texto: se digitar 1-6 reseta e cai no menu abaixo
+  const etapasTexto = ['aguardando_nome_agendamento', 'aguardando_nome_agendar', 'aguardando_nome_planos', 'aguardando_nome_atendente'];
+  if (estado?.agente === 'clientes' && etapasTexto.includes(estado.etapa) && /^[1-6](\s|$)/.test(msgLower)) {
     limparEstado(de);
-  }
-
-  if (obterEstado(de)?.agente === 'clientes') {
+    // não retorna — deixa cair no menu abaixo
+  } else if (estado?.agente === 'clientes') {
 
     // Ver agendamentos
     if (estado.etapa === 'aguardando_nome_agendamento') {
