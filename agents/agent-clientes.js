@@ -69,6 +69,28 @@ function dentroDoPeriodoAtendimento() {
 }
 
 /**
+ * Calcula a próxima data do dia da semana dentro de 6 dias.
+ * Retorna { data: Date, dataFormatada: string } ou null se não houver.
+ */
+function proximaDataDia(diaSemana) {
+  const diasIdx = { 'Segunda': 1, 'Terca': 2, 'Quarta': 3, 'Quinta': 4, 'Sexta': 5, 'Sabado': 6 };
+  const target = diasIdx[diaSemana];
+  const hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  for (let i = 1; i <= 6; i++) {
+    const d = new Date(hoje);
+    d.setDate(hoje.getDate() + i);
+    if (d.getDay() === target) {
+      return {
+        data: d,
+        dataFormatada: d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+      };
+    }
+  }
+  return null;
+}
+
+/**
  * Retorna o nome do atendente responsável no horário atual, ou null se nenhum definido.
  * Até 12h → Messias   15h-19:30h → Marina
  */
@@ -123,14 +145,14 @@ const MSG = {
     `Perfeito, *${horario}*! 📅\n\nQual dia da semana prefere?\n\n` +
     `1️⃣ Segunda\n2️⃣ Terca\n3️⃣ Quarta\n4️⃣ Quinta\n5️⃣ Sexta\n6️⃣ Sabado`,
 
-  encaminharAtendente: () =>
-    `Vou encaminhar para um atendente para ver disponibilidade. Aguarde! ⏳`,
+  encaminharAtendente: (dia, dataFormatada, horario) =>
+    `Perfeito! Vou verificar a disponibilidade para *${dia}, ${dataFormatada}* às *${horario}*.\n\nAguarde a confirmação! ⏳`,
 
   agendamentoConfirmado: (dados) =>
     `✅ *Seu agendamento foi confirmado!*\n\n` +
     `👤 ${dados.nome}\n` +
     `🏋️ ${dados.modalidade}\n` +
-    `📅 ${dados.dia}\n` +
+    `📅 ${dados.dia}${dados.dataFormatada ? `, ${dados.dataFormatada}` : ''}\n` +
     `⏰ ${dados.horario}\n\n` +
     `📍 Av. Rubens Montanaro de Borba, 180B\n\n` +
     `Qualquer duvida, estamos aqui! 😊`,
@@ -236,8 +258,8 @@ async function capturarLead(de, profileName) {
   }
 }
 
-async function notificarStudioAgendamento(nome, numero, modalidade, dia, horario) {
-  pendentesAgendamento.set(numero, { nome, modalidade, dia, horario });
+async function notificarStudioAgendamento(nome, numero, modalidade, dia, dataFormatada, horario) {
+  pendentesAgendamento.set(numero, { nome, modalidade, dia, dataFormatada, horario });
   ultimoPendente = numero;
 
   const texto =
@@ -245,7 +267,7 @@ async function notificarStudioAgendamento(nome, numero, modalidade, dia, horario
     `👤 Aluno: *${nome}*\n` +
     `📱 WhatsApp: *${numero}*\n` +
     `🏋️ Modalidade: *${modalidade}*\n` +
-    `📅 Dia: *${dia}*\n` +
+    `📅 Dia: *${dia}, ${dataFormatada}*\n` +
     `⏰ Horario: *${horario}*\n\n` +
     `━━━━━━━━━━━━━━\n` +
     `Responda com:\n` +
@@ -289,7 +311,7 @@ async function processarBotaoDono(buttonId) {
       if (cliente?.dados?.[1]) nomeAluno = cliente.dados[1];
     } catch (e) {}
 
-    await enviarMensagem(`whatsapp:+${numero}`, MSG.agendamentoConfirmado({ nome: nomeAluno, ...dados }));
+    await enviarMensagem(`whatsapp:+${numero}`, MSG.agendamentoConfirmado({ nome: nomeAluno, ...dados, dataFormatada: dados.dataFormatada }));
     pendentesAgendamento.delete(numero);
     return `✅ Confirmacao enviada para ${nomeAluno} (+${numero})`;
   }
@@ -506,15 +528,20 @@ async function processarMensagem(de, mensagem, profileName) {
       const dia = diaMap[msgLower];
       if (!dia) return `Escolha:\n1️⃣ Segunda\n2️⃣ Terca\n3️⃣ Quarta\n4️⃣ Quinta\n5️⃣ Sexta\n6️⃣ Sabado`;
 
+      const dataInfo = proximaDataDia(dia);
+      if (!dataInfo) {
+        return `😔 *${dia}* não tem vaga disponível nos próximos 6 dias.\n\nEscolha outro dia:\n1️⃣ Segunda\n2️⃣ Terca\n3️⃣ Quarta\n4️⃣ Quinta\n5️⃣ Sexta\n6️⃣ Sabado`;
+      }
+
       const { nome, modalidade, horario } = estado.dados;
       limparEstado(de);
 
-      await Clientes.salvarCliente({ nome, whatsapp: de, status: 'Lead', observacoes: `${modalidade} - ${dia} - ${horario}` }).catch(() => {});
+      await Clientes.salvarCliente({ nome, whatsapp: de, status: 'Lead', observacoes: `${modalidade} - ${dia} ${dataInfo.dataFormatada} - ${horario}` }).catch(() => {});
 
-      await notificarStudioAgendamento(nome, normalizarNumero(de), modalidade, dia, horario);
+      await notificarStudioAgendamento(nome, normalizarNumero(de), modalidade, dia, dataInfo.dataFormatada, horario);
 
-      await Logs.registrar('CLIENTES', 'INFO', `Agendamento: ${nome} - ${modalidade} ${dia} ${horario}`);
-      return MSG.encaminharAtendente();
+      await Logs.registrar('CLIENTES', 'INFO', `Agendamento: ${nome} - ${modalidade} ${dia} ${dataInfo.dataFormatada} ${horario}`);
+      return MSG.encaminharAtendente(dia, dataInfo.dataFormatada, horario);
     }
 
     // ── Fluxo Planos ──
