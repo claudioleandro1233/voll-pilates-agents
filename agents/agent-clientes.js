@@ -635,7 +635,7 @@ async function processarMensagem(de, mensagem, profileName) {
     return MSG.pedirNomeAgendar();
   }
 
-  if (msgLower === '2' || /meus agendamentos|ver aula/i.test(msgLower)) {
+  if (msgLower === '2' || /meus agendamentos|ver aula|minhas aulas/i.test(msgLower)) {
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_agendamento', dados: {} });
     return MSG.pedirNomeOuTelefone();
   }
@@ -649,11 +649,11 @@ async function processarMensagem(de, mensagem, profileName) {
     return MSG.totalpass();
   }
 
-  if (msgLower === '5' || /endereco|onde|localizacao|como chegar/i.test(msgLower)) {
+  if (msgLower === '5' || /endereco|onde fica|localizacao|como chegar/i.test(msgLower)) {
     return MSG.endereco();
   }
 
-  if (msgLower === '6' || /atendente|falar com alguem|humano/i.test(msgLower)) {
+  if (msgLower === '6' || /falar com alguem|operador/i.test(msgLower)) {
     if (!dentroDoPeriodoAtendimento()) return MSG.foraDoHorario();
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_atendente', dados: {} });
     return `Para te conectar com um atendente, me diz seu *nome*:`;
@@ -665,13 +665,11 @@ async function processarMensagem(de, mensagem, profileName) {
   }
 
   // NPS
-  if (/^\d+$/.test(msgLower)) {
-    const n = parseInt(msgLower);
-    if (n >= 0 && n <= 10 && n > 6) {
-      await Clientes.salvarNPS({ whatsapp: de, nome: profileName, nota: n });
-      const emo = n >= 9 ? '🌟' : '😊';
-      return `${emo} Obrigada pela avaliacao *${n}/10*, ${profileName}! 💙`;
-    }
+  const npsNum = parseInt(msgLower);
+  if (/^\d+$/.test(msgLower) && npsNum >= 7 && npsNum <= 10) {
+    await Clientes.salvarNPS({ whatsapp: de, nome: profileName, nota: npsNum }).catch(() => {});
+    const emo = npsNum >= 9 ? '🌟' : '😊';
+    return `${emo} Obrigada pela avaliacao *${npsNum}/10*, ${profileName}! 💙`;
   }
 
   await capturarLead(de, profileName);
