@@ -459,7 +459,7 @@ async function processarMensagem(de, mensagem, profileName) {
   // ── Fluxos ativos ────────────────────────────────────────────────────────
   // Se o aluno digitar uma opção do menu (1-6) enquanto espera texto (nome/telefone),
   // reseta o estado e trata como nova seleção de menu
-  const etapasTexto = ['aguardando_nome_agendamento', 'aguardando_nome_agendar', 'aguardando_nome_planos', 'aguardando_nome_atendente'];
+  const etapasTexto = ['aguardando_nome_agendamento', 'aguardando_nome_agendar', 'aguardando_nome_planos', 'aguardando_nome_atendente', 'aguardando_modalidade_agendar', 'aguardando_horario_agendar', 'aguardando_dia_agendar', 'aguardando_modalidade_planos', 'aguardando_frequencia_planos'];
   if (estado?.agente === 'clientes' && etapasTexto.includes(estado.etapa) && /^[1-6]$/.test(msgTrim)) {
     limparEstado(de);
   }
@@ -468,6 +468,7 @@ async function processarMensagem(de, mensagem, profileName) {
 
     // Ver agendamentos
     if (estado.etapa === 'aguardando_nome_agendamento') {
+      if (msgTrim.length < 3) return `Por favor, informe seu *nome ou telefone*:`;
       try {
         const resultado = await Clientes.buscarPorWhatsApp(de);
         limparEstado(de);
