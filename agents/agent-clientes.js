@@ -20,6 +20,10 @@ const pendentesAgendamento = new Map();
 // Último número pendente — usado para mapear respostas 1/2/3 do dono
 let ultimoPendente = null;
 
+// Números em atendimento humano ativo — bot silenciado para esses alunos
+// chave: numero normalizado (sem whatsapp:+), valor: timestamp de início
+const emAtendimentoHumano = new Map();
+
 // ─── Controle de inatividade ─────────────────────────────────────────────────
 const ultimaAtividade = new Map();  // de -> timestamp última mensagem
 const avisoInatividade = new Set(); // de (já recebeu aviso de inatividade)
@@ -379,8 +383,20 @@ async function processarComandoDono(mensagem, de) {
   const msgMatch = msgTrim.match(/^\/msg\s+(\d+)\s+(.+)/is);
   if (msgMatch) {
     const [, numero, texto] = msgMatch;
-    await enviarMensagem(`whatsapp:+${normalizarNumero(numero)}`, texto.trim());
-    return `✅ Mensagem enviada para +${numero}`;
+    const numNorm = normalizarNumero(numero);
+    await enviarMensagem(`whatsapp:+${numNorm}`, texto.trim());
+    // Ativa modo atendimento humano — bot silenciado para esse aluno
+    emAtendimentoHumano.set(numNorm, Date.now());
+    limparEstado(`whatsapp:+${numNorm}`);
+    return `✅ Mensagem enviada para +${numero}\n🤫 Bot silenciado para esse aluno. Use */liberarBot ${numero}* para reativar.`;
+  }
+
+  // /liberarBot <numero>
+  const liberarMatch = msgTrim.match(/^\/liberarbot\s+(\d+)/i);
+  if (liberarMatch) {
+    const [, numero] = liberarMatch;
+    emAtendimentoHumano.delete(normalizarNumero(numero));
+    return `✅ Bot reativado para +${numero}`;
   }
 
   // /posAula <numero>
@@ -437,6 +453,11 @@ async function processarMensagem(de, mensagem, profileName) {
   // ── Registra atividade e reseta aviso de inatividade ─────────────────────
   ultimaAtividade.set(de, Date.now());
   avisoInatividade.delete(de);
+
+  // ── Bot silenciado para atendimento humano ───────────────────────────────
+  if (remetenteNumero !== donoNumero && emAtendimentoHumano.has(remetenteNumero)) {
+    return null; // silêncio total
+  }
 
   // ── Dono: respostas rápidas 1/2/3 (só se não tiver fluxo ativo próprio) ──
   if (remetenteNumero === donoNumero && ['1', '2', '3'].includes(msgTrim) && !estado) {
@@ -679,7 +700,7 @@ router.post('/', async (req, res) => {
 
     logger.info(`[CLIENTES] ${de}: "${mensagem}"`);
     const resposta = await processarMensagem(de, mensagem, profileName);
-    await enviarMensagem(de, resposta);
+    if (resposta) await enviarMensagem(de, resposta);
     res.status(200).send('OK');
   } catch (erro) {
     logger.error(`[CLIENTES] Erro: ${erro.message}`);
@@ -708,6 +729,7 @@ cron.schedule('5 * * * 1-6', async () => {
 
       const whatsapp = aluno[2]; // col WhatsApp
       if (!whatsapp) continue;
+      if (emAtendimentoHumano.has(normalizarNumero(whatsapp))) continue;
 
       definirEstado(whatsapp, { agente: 'clientes', etapa: 'aguardando_feedback_pos_aula', dados: {} });
       await enviarMensagem(whatsapp, MSG.posAulaFeedback()).catch(e =>
