@@ -423,9 +423,11 @@ async function processarComandoDono(mensagem, de) {
 // ─── Roteador principal ───────────────────────────────────────────────────────
 async function processarMensagem(de, mensagem, profileName) {
   const msgTrim = mensagem.trim();
-  // Remove emojis e espaços extras para comparação limpa
-  const msgClean = msgTrim.replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, '').trim();
-  const msgLower = msgClean.toLowerCase();
+  let msgLower = msgTrim.toLowerCase().trim();
+  msgLower = msgLower
+    .replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{FE0F}\u{20E3}]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   const estado = obterEstado(de);
   const donoNumero = normalizarNumero(DONO());
   const remetenteNumero = normalizarNumero(de);
@@ -631,31 +633,21 @@ async function processarMensagem(de, mensagem, profileName) {
   }
 
   // ── Opcoes do menu ────────────────────────────────────────────────────────
-  if (/^1\b/.test(msgLower) || /agendar|marcar|quero aula/i.test(msgLower)) {
+  if (/1|agendar|marcar|quero aula|reserva|aula|agende/i.test(msgLower)) {
     await capturarLead(de, profileName);
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_agendar', dados: {} });
     return MSG.pedirNomeAgendar();
-  }
-
-  if (/^2\b/.test(msgLower) || /meus agendamentos|ver aula|minhas aulas/i.test(msgLower)) {
+  } else if (/2|agendamentos?|minhas? aulas?|ver agend/i.test(msgLower)) {
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_agendamento', dados: {} });
     return MSG.pedirNomeOuTelefone();
-  }
-
-  if (/^3\b/.test(msgLower) || /plano|valor|preco|mensalidade|quanto custa/i.test(msgLower)) {
+  } else if (/3|plano|valor|preco|mensalidade|custa|pre[çc]o/i.test(msgLower)) {
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_planos', dados: {} });
     return MSG.pedirNomePlanos();
-  }
-
-  if (/^4\b/.test(msgLower) || /totalpass|welhub|gympass/i.test(msgLower)) {
+  } else if (/4|totalpass|welhub|gympass/i.test(msgLower)) {
     return MSG.totalpass();
-  }
-
-  if (/^5\b/.test(msgLower) || /endereco|onde fica|localizacao|como chegar/i.test(msgLower)) {
+  } else if (/5|endere[çc]o|onde|localiza|chegar/i.test(msgLower)) {
     return MSG.endereco();
-  }
-
-  if (/^6\b/.test(msgLower) || /falar com alguem|operador/i.test(msgLower)) {
+  } else if (/6|atendente|alguem|humano|operador/i.test(msgLower)) {
     if (!dentroDoPeriodoAtendimento()) return MSG.foraDoHorario();
     definirEstado(de, { agente: 'clientes', etapa: 'aguardando_nome_atendente', dados: {} });
     return `Para te conectar com um atendente, me diz seu *nome*:`;
