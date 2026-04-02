@@ -128,9 +128,13 @@ const MSG = {
     `Escreva o item que deseja e eu te ajudo! 😊`,
 
   opcaoInvalida: () =>
-    `Opcao invalida. Digite 1-6 para o menu.\n\n` +
-    `1️⃣ Agendar  2️⃣ Agendamentos  3️⃣ Planos\n` +
-    `4️⃣ TotalPass  5️⃣ Endereco  6️⃣ Atendente`,
+    `Nao entendi sua mensagem. Escreva um dos itens abaixo:\n\n` +
+    `• Agendar uma aula\n` +
+    `• Ver meus agendamentos\n` +
+    `• Planos e valores\n` +
+    `• TotalPass / Welhub\n` +
+    `• Endereco e horarios\n` +
+    `• Falar com atendente`,
 
   // ── Agendamento ──
   pedirNomeAgendar: () => `Otimo! 😊 Para agendar, primeiro me diz seu *nome completo*:`,
