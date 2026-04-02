@@ -456,13 +456,15 @@ async function processarMensagem(de, mensagem, profileName) {
     return resposta || `Comando nao reconhecido. Digite */ajuda* para ver os comandos.`;
   }
 
-  // Debug temporario — manda /debug para ver os numeros comparados
-  if (msgTrim === '/debug') {
-    return `rem: ${remetenteNumero}\ndono: ${donoNumero}\nigual: ${remetenteNumero === donoNumero}`;
+  // ── Fluxos ativos ────────────────────────────────────────────────────────
+  // Se o aluno digitar uma opção do menu (1-6) enquanto espera texto (nome/telefone),
+  // reseta o estado e trata como nova seleção de menu
+  const etapasTexto = ['aguardando_nome_agendamento', 'aguardando_nome_agendar', 'aguardando_nome_planos', 'aguardando_nome_atendente'];
+  if (estado?.agente === 'clientes' && etapasTexto.includes(estado.etapa) && /^[1-6]$/.test(msgTrim)) {
+    limparEstado(de);
   }
 
-  // ── Fluxos ativos ────────────────────────────────────────────────────────
-  if (estado?.agente === 'clientes') {
+  if (obterEstado(de)?.agente === 'clientes') {
 
     // Ver agendamentos
     if (estado.etapa === 'aguardando_nome_agendamento') {
